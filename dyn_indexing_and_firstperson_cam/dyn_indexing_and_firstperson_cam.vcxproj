@@ -154,6 +154,7 @@
     <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="blur_filter.cpp" />
+    <ClCompile Include="camera.cpp" />
     <ClCompile Include="firstperson_cam.cpp" />
     <ClCompile Include="gpu_waves.cpp" />
     <ClCompile Include="offscreen_render_target.cpp" />
@@ -161,6 +162,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="blur_filter.h" />
+    <ClInclude Include="camera.h" />
     <ClInclude Include="gpu_waves.h" />
     <ClInclude Include="headers\common.h" />
     <ClInclude Include="headers\dds_loader.h" />

@@ -10,7 +10,27 @@
 
 #include "light_utils.hlsl"
 
-Texture2D global_diffuse_map : register(t0);
+struct MaterialData {
+    float4 diffuse_albedo;
+    float3 fresnel_r0;
+    float roughness;
+    float4x4 mat_transform;
+
+    uint diffuse_map_index;
+    uint mat_pad0;
+    uint mat_pad1;
+    uint mat_pad2;
+};
+
+// array of textures
+// unlike Texture2DArray, the textures can be different sizes and formats
+// 5 is number of textures
+Texture2D global_diffuse_map_array[5] : register(t0);
+
+// use space1 to avoid overlap wth texture array (in space0)
+StructuredBuffer<MaterialData> global_mat_data_array : register(t0, space1);
+
+// waves displacement map
 Texture2D global_displacement_map : register(t1);
 
 SamplerState global_sam_point_wrap : register(s0);
@@ -20,14 +40,19 @@ SamplerState global_sam_linear_clamp : register(s3);
 SamplerState global_sam_anisotropic_wrap : register(s4);
 SamplerState global_sam_anisotropic_clamp : register(s5);
 
-cbuffer PerObjectConstantBuffer : register(b0) {
+cbuffer PerObjectConstantBuffer : register(b0){
     float4x4 global_world;
     float4x4 global_tex_transform;
-    float2  global_displacement_map_texel_size;
-    float   global_grid_spatial_step;
-    float   cb_per_obj_pad1;
+    float2 global_displacement_map_texel_size;
+    float global_grid_spatial_step;
+    float cb_per_obj_pad1;
+
+    uint global_mat_index;
+    uint obj_pad0;
+    uint obj_pad1;
+    uint obj_pad2;
 }
-cbuffer PerPassConstantBuffer : register(b1) {
+cbuffer PerPassConstantBuffer : register(b1){
     float4x4 global_view;
     float4x4 global_inv_view;
     float4x4 global_proj;
@@ -57,12 +82,6 @@ cbuffer PerPassConstantBuffer : register(b1) {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light global_lights[MAX_LIGHTS];
 }
-cbuffer MaterialConstantBuffer : register(b2) {
-    float4 global_diffuse_albedo;
-    float3 global_fresnel_r0;
-    float global_roughness;
-    float4x4 global_mat_transform;
-};
 
 struct VertexShaderInput {
     float3 pos_local : POSITION;
@@ -77,7 +96,7 @@ struct VertexShaderOutput {
 };
 VertexShaderOutput
 VertexShader_Main (VertexShaderInput vin) {
-    VertexShaderOutput result = (VertexShaderOutput) 0.0f;
+    VertexShaderOutput result = (VertexShaderOutput)0.0f;
 
 #ifdef DISPLACEMENT_MAP
     // sampler the displacement map using non-transformed [0,1]^2 texture-coords
@@ -93,26 +112,39 @@ VertexShader_Main (VertexShaderInput vin) {
     vin.normal_local = normalize(float3(-r + l, 2.0f * global_grid_spatial_step, b - t));
 #endif
     
+    // fetch material data
+    MaterialData mat_data = global_mat_data_array[global_mat_index];
+    
     // transform to world space
     float4 pos_world = mul(float4(vin.pos_local, 1.0f), global_world);
     result.pos_world = pos_world.xyz;
     
     // assuming nonuniform scale (otherwise have to use inverse-transpose of world-matrix)
-    result.normal_world = mul(vin.normal_local, (float3x3) global_world);
+    result.normal_world = mul(vin.normal_local, (float3x3)global_world);
 
     // transform to homogenous clip space
     result.pos_homogenous_clip_space = mul(pos_world, global_view_proj);
 
     // output vertex attributes for interpolation across triangle
     float4 texc = mul(float4(vin.texc, 0.0f, 1.0f), global_tex_transform);
-    result.texc = mul(texc, global_mat_transform).xy;
+    result.texc = mul(texc, mat_data.mat_transform).xy;
 
     return result;
 }
 float4
-PixelShader_Main (VertexShaderOutput pin) : SV_Target {
-    float4 diffuse_albedo =
-        global_diffuse_map.Sample(global_sam_anisotropic_wrap, pin.texc) * global_diffuse_albedo;
+PixelShader_Main (VertexShaderOutput pin) : SV_Target{
+    // fetch material data
+    MaterialData mat_data = global_mat_data_array[global_mat_index];
+    
+    // extract data
+    float4 diffuse_albedo = mat_data.diffuse_albedo;
+    uint diffuse_tex_index = mat_data.diffuse_map_index;
+    float roughness = mat_data.roughness;
+    float3 fresnel_r0 = mat_data.fresnel_r0;
+    
+    // dynamically look up the texture in the array
+    diffuse_albedo *=
+        global_diffuse_map_array[diffuse_tex_index].Sample(global_sam_anisotropic_wrap, pin.texc);
 
 #ifdef ALPHA_TEST
     clip(diffuse_albedo.a - 0.1f);
@@ -129,8 +161,8 @@ PixelShader_Main (VertexShaderOutput pin) : SV_Target {
     // indirect lighting
     float4 ambient = global_ambient_light * diffuse_albedo;
 
-    const float shininess = 1.0f - global_roughness;
-    Material mat = { diffuse_albedo, global_fresnel_r0, shininess };
+    const float shininess = 1.0f - roughness;
+    Material mat = {diffuse_albedo, fresnel_r0, shininess};
     float3 shadow_factor = 1.0f;
     float4 direct_light = compute_lighting(
         global_lights, mat, pin.pos_world, pin.normal_world, to_eye, shadow_factor

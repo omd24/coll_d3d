@@ -15,12 +15,13 @@
 #include "blur_filter.h"
 #include "sobel_filter.h"
 
-
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_win32.h>
 #include <imgui/imgui_impl_dx12.h>
 
 #include <time.h>
+
+#include "camera.h"
 
 #if !defined(NDEBUG) && !defined(_DEBUG)
 #error "Define at least one."
@@ -121,10 +122,6 @@ enum SAMPLER_INDEX {
     _COUNT_SAMPLER
 };
 struct SceneContext {
-    // camera settings (spherical coordinate)
-    float theta;
-    float phi;
-    float radius;
 
     // light (sun) settings
     float sun_theta;
@@ -133,17 +130,13 @@ struct SceneContext {
     // mouse position
     POINT mouse;
 
-    // world view projection matrices
-    XMFLOAT3   eye_pos;
-    XMFLOAT4X4 view;
-    XMFLOAT4X4 proj;
-
     // display-related data
     UINT width;
     UINT height;
     float aspect_ratio;
 };
 
+Camera * global_camera;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
@@ -690,14 +683,11 @@ static void
 draw_render_items (
     ID3D12GraphicsCommandList * cmd_list,
     ID3D12Resource * object_cbuffer,
-    ID3D12Resource * mat_cbuffer,
     UINT64 descriptor_increment_size,
-    ID3D12DescriptorHeap * srv_heap,
     RenderItemArray * ritem_array,
     UINT current_frame_index
 ) {
     UINT objcb_byte_size = (UINT64)sizeof(ObjectConstants);
-    UINT matcb_byte_size = (UINT64)sizeof(MaterialConstants);
     for (size_t i = 0; i < ritem_array->size; ++i) {
         if (ritem_array->ritems[i].initialized) {
             D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(ritem_array->ritems[i].geometry);
@@ -706,18 +696,11 @@ draw_render_items (
             cmd_list->IASetIndexBuffer(&ibv);
             cmd_list->IASetPrimitiveTopology(ritem_array->ritems[i].primitive_type);
 
-            D3D12_GPU_DESCRIPTOR_HANDLE tex = srv_heap->GetGPUDescriptorHandleForHeapStart();
-            tex.ptr += descriptor_increment_size * ritem_array->ritems[i].mat->diffuse_srvheap_index;
-
             D3D12_GPU_VIRTUAL_ADDRESS objcb_address = object_cbuffer->GetGPUVirtualAddress();
             objcb_address += (UINT64)ritem_array->ritems[i].obj_cbuffer_index * objcb_byte_size;
 
-            D3D12_GPU_VIRTUAL_ADDRESS matcb_address = mat_cbuffer->GetGPUVirtualAddress();
-            matcb_address += (UINT64)ritem_array->ritems[i].mat->mat_cbuffer_index * matcb_byte_size;
+            cmd_list->SetGraphicsRootConstantBufferView(0, objcb_address);
 
-            cmd_list->SetGraphicsRootDescriptorTable(0, tex);
-            cmd_list->SetGraphicsRootConstantBufferView(1, objcb_address);
-            cmd_list->SetGraphicsRootConstantBufferView(3, matcb_address);
             cmd_list->DrawIndexedInstanced(ritem_array->ritems[i].index_count, 1, ritem_array->ritems[i].start_index_loc, ritem_array->ritems[i].base_vertex_loc, 0);
         }
     }
@@ -729,7 +712,6 @@ create_descriptor_heaps (
     BlurFilter * blur, SobelFilter * sobel,
     OffscreenRenderTarget * ort
 ) {
-
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors = _COUNT_TEX +
@@ -972,38 +954,44 @@ static void
 create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
     D3D12_DESCRIPTOR_RANGE tex_table = {};
     tex_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    tex_table.NumDescriptors = 1;
+    tex_table.NumDescriptors = _COUNT_TEX;
     tex_table.BaseShaderRegister = 0;
     tex_table.RegisterSpace = 0;
     tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    // NOTE(omid): The 5 elements of texture array occupy registers t0, t1, t2, t3 and t4
+
     D3D12_DESCRIPTOR_RANGE displacement_map_table = {};
     displacement_map_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     displacement_map_table.NumDescriptors = 1;
-    displacement_map_table.BaseShaderRegister = 1;
+    displacement_map_table.BaseShaderRegister = _COUNT_TEX; // t5
     displacement_map_table.RegisterSpace = 0;
     displacement_map_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER slot_root_params[5] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[0].DescriptorTable.pDescriptorRanges = &tex_table;
+    // -- obj cbuffer
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    slot_root_params[0].Descriptor.ShaderRegister = 0;
+    slot_root_params[0].Descriptor.RegisterSpace = 0;
     slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // -- pass cbuffer
     slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    slot_root_params[1].Descriptor.ShaderRegister = 0;
+    slot_root_params[1].Descriptor.ShaderRegister = 1;
     slot_root_params[1].Descriptor.RegisterSpace = 0;
     slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    slot_root_params[2].Descriptor.ShaderRegister = 1;
-    slot_root_params[2].Descriptor.RegisterSpace = 0;
+    // -- structured buffer <material data>
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    slot_root_params[2].Descriptor.ShaderRegister = 0;
+    slot_root_params[2].Descriptor.RegisterSpace = 1;
     slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    slot_root_params[3].Descriptor.ShaderRegister = 2;
-    slot_root_params[3].Descriptor.RegisterSpace = 0;
+
+    slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[3].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table;
     slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1024,7 +1012,7 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
 
     ID3DBlob * serialized_root_sig = nullptr;
     ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
+    HRESULT hr = D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
 
     if (error_blob) {
         ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
@@ -1219,7 +1207,7 @@ create_root_signature_postprocessing_sobel (ID3D12Device * device, ID3D12RootSig
     );
 }
 static HRESULT
-compile_shader(wchar_t * path, wchar_t const * entry_point, wchar_t const * shader_model, DxcDefine defines [], int n_defines, IDxcBlob ** out_shader_ptr) {
+compile_shader (wchar_t * path, wchar_t const * entry_point, wchar_t const * shader_model, DxcDefine defines [], int n_defines, IDxcBlob ** out_shader_ptr) {
     // -- using DXC shader compiler [https://asawicki.info/news_1719_two_shader_compilers_of_direct3d_12]
     HRESULT ret = E_FAIL;
 
@@ -1485,7 +1473,21 @@ create_pso (D3DRenderContext * render_ctx) {
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
+    float dt = gt->delta_time;
 
+    if (GetAsyncKeyState('W') & 0x8000)
+        Camera_Walk(global_camera, 10.0f * dt);
+
+    if (GetAsyncKeyState('S') & 0x8000)
+        Camera_Walk(global_camera, -10.0f * dt);
+
+    if (GetAsyncKeyState('A') & 0x8000)
+        Camera_Strafe(global_camera, -10.0f * dt);
+
+    if (GetAsyncKeyState('D') & 0x8000)
+        Camera_Strafe(global_camera, 10.0f * dt);
+
+    Camera_UpdateViewMatrix(global_camera);
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
@@ -1495,41 +1497,12 @@ handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
             float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
             float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-            // update angles (to orbit camera around)
-            scene_ctx->theta += dx;
-            scene_ctx->phi += dy;
-
-            // clamp phi
-            scene_ctx->phi = CLAMP_VALUE(scene_ctx->phi, 0.1f, XM_PI - 0.1f);
-        } else if ((wParam & MK_RBUTTON) != 0) {
-            // make each pixel correspond to a 0.2 unit in scene
-            float dx = 0.2f * (float)(x - scene_ctx->mouse.x);
-            float dy = 0.2f * (float)(y - scene_ctx->mouse.y);
-
-            // update camera radius
-            scene_ctx->radius += dx - dy;
-
-            // clamp radius
-            scene_ctx->radius = CLAMP_VALUE(scene_ctx->radius, 5.0f, 150.0f);
+            Camera_Pitch(global_camera, dy);
+            Camera_RotateY(global_camera, dx);
         }
     }
     scene_ctx->mouse.x = x;
     scene_ctx->mouse.y = y;
-}
-static void
-update_camera (SceneContext * sc) {
-    // Convert Spherical to Cartesian coordinates.
-    sc->eye_pos.x = sc->radius * sinf(sc->phi) * cosf(sc->theta);
-    sc->eye_pos.z = sc->radius * sinf(sc->phi) * sinf(sc->theta);
-    sc->eye_pos.y = sc->radius * cosf(sc->phi);
-
-    // Build the view matrix.
-    XMVECTOR pos = XMVectorSet(sc->eye_pos.x, sc->eye_pos.y, sc->eye_pos.z, 1.0f);
-    XMVECTOR target = XMVectorZero();
-    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-    XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
-    XMStoreFloat4x4(&sc->view, view);
 }
 static void
 update_obj_cbuffers (D3DRenderContext * render_ctx) {
@@ -1552,6 +1525,9 @@ update_obj_cbuffers (D3DRenderContext * render_ctx) {
             obj_cbuffer.displacement_texel_size = render_ctx->all_ritems.ritems[i].displacement_map_texel_size;
             obj_cbuffer.grid_spatial_step = render_ctx->all_ritems.ritems[i].grid_spatial_step;
 
+            // set mat index for dynamic indexing
+            obj_cbuffer.mat_index = render_ctx->all_ritems.ritems[i].mat->mat_cbuffer_index;
+
             uint8_t * obj_ptr = render_ctx->frame_resources[frame_index].obj_cb_data_ptr + ((UINT64)obj_index * cbuffer_size);
             memcpy(obj_ptr, &obj_cbuffer, cbuffer_size);
 
@@ -1561,24 +1537,23 @@ update_obj_cbuffers (D3DRenderContext * render_ctx) {
     }
 }
 static void
-update_mat_cbuffers (D3DRenderContext * render_ctx) {
+update_mat_buffer (D3DRenderContext * render_ctx) {
     UINT frame_index = render_ctx->frame_index;
-    UINT cbuffer_size = sizeof(MaterialConstants);
+    size_t mat_data_size = sizeof(MaterialData);
     for (int i = 0; i < _COUNT_MATERIAL; ++i) {
-        // Only update the cbuffer data if the constants have changed.  If the cbuffer
-        // data changes, it needs to be updated for each FrameResource.
         Material * mat = &render_ctx->materials[i];
         if (mat->n_frames_dirty > 0) {
             XMMATRIX mat_transform = XMLoadFloat4x4(&mat->mat_transform);
 
-            MaterialConstants mat_constants;
-            mat_constants.diffuse_albedo = render_ctx->materials[i].diffuse_albedo;
-            mat_constants.fresnel_r0 = render_ctx->materials[i].fresnel_r0;
-            mat_constants.roughness = render_ctx->materials[i].roughness;
-            XMStoreFloat4x4(&mat_constants.mat_transform, XMMatrixTranspose(mat_transform));
+            MaterialData mat_data;
+            mat_data.diffuse_albedo = render_ctx->materials[i].diffuse_albedo;
+            mat_data.fresnel_r0 = render_ctx->materials[i].fresnel_r0;
+            mat_data.roughness = render_ctx->materials[i].roughness;
+            XMStoreFloat4x4(&mat_data.mat_transform, XMMatrixTranspose(mat_transform));
+            mat_data.diffuse_map_index = mat->diffuse_srvheap_index;
 
-            uint8_t * mat_ptr = render_ctx->frame_resources[frame_index].mat_cb_data_ptr + ((UINT64)mat->mat_cbuffer_index * cbuffer_size);
-            memcpy(mat_ptr, &mat_constants, cbuffer_size);
+            uint8_t * mat_ptr = render_ctx->frame_resources[frame_index].mat_data_buf_ptr + ((UINT64)mat->mat_cbuffer_index * mat_data_size);
+            memcpy(mat_ptr, &mat_data, mat_data_size);
 
             // Next FrameResource need to be updated too.
             mat->n_frames_dirty--;
@@ -1588,8 +1563,8 @@ update_mat_cbuffers (D3DRenderContext * render_ctx) {
 static void
 update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 
-    XMMATRIX view = XMLoadFloat4x4(&global_scene_ctx.view);
-    XMMATRIX proj = XMLoadFloat4x4(&global_scene_ctx.proj);
+    XMMATRIX view = Camera_GetView(global_camera);
+    XMMATRIX proj = Camera_GetProj(global_camera);
 
     XMMATRIX view_proj = XMMatrixMultiply(view, proj);
     XMVECTOR det_view = XMMatrixDeterminant(view);
@@ -1605,7 +1580,7 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_proj, XMMatrixTranspose(inv_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view_proj, XMMatrixTranspose(inv_view_proj));
-    render_ctx->main_pass_constants.eye_posw = global_scene_ctx.eye_pos;
+    render_ctx->main_pass_constants.eye_posw = Camera_GetPosition3f(global_camera);
 
     render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)global_scene_ctx.width, (float)global_scene_ctx.height);
     render_ctx->main_pass_constants.inverse_render_target_size = XMFLOAT2(1.0f / global_scene_ctx.width, 1.0f / global_scene_ctx.height);
@@ -1787,16 +1762,24 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
-    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
-    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv); // set displacement map
+    cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb->GetGPUVirtualAddress());
+
+    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
+    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].mat_data_buf;
+    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
+
+    // Bind all textures. We only specify the first descriptor in the table
+    // Root sig knows how many descriptors we have in the table
+    cmdlist->SetGraphicsRootDescriptorTable(3, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+
+     // set displacement map for waves
+    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv);
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->opaque_ritems, frame_index
     );
     // 2. draw alpha-tested box/crate
@@ -1804,9 +1787,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->alphatested_ritems, frame_index
     );
     // 3. draw tree-sprites
@@ -1814,9 +1795,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->alphatested_treesprites_ritems, frame_index
     );
     // 4. draw gpu waves
@@ -1824,9 +1803,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->gpu_waves_rtimes, frame_index
     );
 
@@ -1875,6 +1852,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     return ret;
 }
+
 static HRESULT
 draw_stylized (
     D3DRenderContext * render_ctx,
@@ -1884,6 +1862,10 @@ draw_stylized (
     SobelFilter * sobel_filter
 ) {
     HRESULT ret = E_FAIL;
+
+#if 0
+
+
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
     ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
@@ -2038,30 +2020,25 @@ draw_stylized (
 
     render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
 
+#endif // 0
+
     return ret;
 }
 
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
-    _ASSERT_EXPR(scene_ctx, "scene_ctx not valid");
+    _ASSERT_EXPR(scene_ctx, _T("scene_ctx not valid"));
     memset(scene_ctx, 0, sizeof(SceneContext));
 
     scene_ctx->width = w;
     scene_ctx->height = h;
-    scene_ctx->theta = 1.5f * XM_PI;
-    scene_ctx->phi = XM_PIDIV2 - 0.1f;
-    scene_ctx->radius = 50.0f;
     scene_ctx->sun_theta = 1.25f * XM_PI;
     scene_ctx->sun_phi = XM_PIDIV4;
     scene_ctx->aspect_ratio = (float)scene_ctx->width / (float)scene_ctx->height;
-    scene_ctx->eye_pos = {0.0f, 0.0f, 0.0f};
-    scene_ctx->view = Identity4x4();
-    XMMATRIX p = DirectX::XMMatrixPerspectiveFovLH(0.25f * XM_PI, scene_ctx->aspect_ratio, 1.0f, 1000.0f);
-    XMStoreFloat4x4(&scene_ctx->proj, p);
 }
 static void
 RenderContext_Init (D3DRenderContext * render_ctx) {
-    _ASSERT_EXPR(render_ctx, "render-ctx not valid");
+    _ASSERT_EXPR(render_ctx, _T("render-ctx not valid"));
     memset(render_ctx, 0, sizeof(D3DRenderContext));
 
     render_ctx->viewport.TopLeftX = 0;
@@ -2212,10 +2189,8 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
 
         render_ctx->scissor_rect = {0, 0, w, h};
 
-        // The window resized, so update the aspect ratio and recompute the projection matrix.
+        // The window resized, so update the aspect ratio
         global_scene_ctx.aspect_ratio = static_cast<float>(w) / h;
-        XMMATRIX p = DirectX::XMMatrixPerspectiveFovLH(0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
-        XMStoreFloat4x4(&global_scene_ctx.proj, p);
 
         // blur filter resize
         if (blur)
@@ -2230,6 +2205,8 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
             OffscreenRenderTarget_Resize(ort, w, h);
         }
     }
+
+    Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
 }
 static void
 check_active_item () {
@@ -2336,13 +2313,18 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
     return ret;
 }
-
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     SceneContext_Init(&global_scene_ctx, 1280, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
+
+    // Camera Initial Setup
+    size_t cam_size = Camera_CalculateRequiredSize();
+    global_camera = (Camera *)malloc(cam_size);
+    Camera_Init(global_camera);
+    Camera_SetPosition(global_camera, 10.0f, 5.0f, -45.0f);
 
     // ========================================================================================================
 #pragma region Windows_Setup
@@ -2352,7 +2334,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     wc.hInstance = hInstance;
     wc.lpszClassName = _T("d3d12_win32");
 
-    _ASSERT_EXPR(RegisterClass(&wc), "could not register window class");
+    _ASSERT_EXPR(RegisterClass(&wc), _T("could not register window class"));
 
     // Compute window rectangle dimensions based on requested client area dimensions.
     RECT R = {0, 0, (long int)global_scene_ctx.width, (long int)global_scene_ctx.height};
@@ -2435,7 +2417,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         sizeof(quality_levels)
     );
     render_ctx->msaa4x_quality = quality_levels.NumQualityLevels;
-    _ASSERT_EXPR(render_ctx->msaa4x_quality > 0, "Unexpected MSAA quality level.");
+    _ASSERT_EXPR(render_ctx->msaa4x_quality > 0, _T("Unexpected MSAA quality level."));
 
 #pragma region Create Command Objects
     // Create Command Queue
@@ -2645,9 +2627,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #pragma endregion
 
-#pragma region Create CBuffers
+#pragma region Create CBuffers MaterialData Buffers
     UINT obj_cb_size = sizeof(ObjectConstants);
-    UINT mat_cb_size = sizeof(MaterialConstants);
+    UINT mat_data_size = sizeof(MaterialData);
     UINT pass_cb_size = sizeof(PassConstants);
     for (UINT i = 0; i < NUM_QUEUING_FRAMES; ++i) {
         // -- create a cmd-allocator for each frame
@@ -2658,9 +2640,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // Initialize cb data
         ::memcpy(render_ctx->frame_resources[i].obj_cb_data_ptr, &render_ctx->frame_resources[i].obj_cb_data, sizeof(render_ctx->frame_resources[i].obj_cb_data));
 
-        create_upload_buffer(render_ctx->device, (UINT64)mat_cb_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].mat_cb_data_ptr, &render_ctx->frame_resources[i].mat_cb);
+        create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].mat_data_buf_ptr, &render_ctx->frame_resources[i].mat_data_buf);
         // Initialize cb data
-        ::memcpy(render_ctx->frame_resources[i].mat_cb_data_ptr, &render_ctx->frame_resources[i].mat_cb_data, sizeof(render_ctx->frame_resources[i].mat_cb_data));
+        ::memcpy(render_ctx->frame_resources[i].mat_data_buf_ptr, &render_ctx->frame_resources[i].mat_data, sizeof(render_ctx->frame_resources[i].mat_data));
 
         create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb);
         // Initialize cb data
@@ -2874,7 +2856,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 ImGui::Checkbox("Draw Stylized (Sobel Filter)", &stylized_sobel);
 
-                ImGui::Text("\n\n");
+                ImGui::Text("\nUse \'W\' \'S\' for Walk, \'A\' \'D\' for Strafing");
+
+                ImGui::Text("\n");
                 ImGui::Separator();
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
@@ -2894,16 +2878,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
             if (!global_paused) {
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
-                update_camera(&global_scene_ctx);
 
                 animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
                 update_obj_cbuffers(render_ctx);
-                update_mat_cbuffers(render_ctx);
+                update_mat_buffer(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
                 if (!stylized_sobel) {
                     CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                } else {
+                } else if (false) {
                     CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 }
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
@@ -2929,10 +2912,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     for (size_t i = 0; i < NUM_QUEUING_FRAMES; i++) {
         flush_command_queue(render_ctx);    // TODO(omid): Address the cbuffers release issue 
         render_ctx->frame_resources[i].obj_cb->Unmap(0, nullptr);
-        render_ctx->frame_resources[i].mat_cb->Unmap(0, nullptr);
+        render_ctx->frame_resources[i].mat_data_buf->Unmap(0, nullptr);
         render_ctx->frame_resources[i].pass_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].obj_cb->Release();
-        render_ctx->frame_resources[i].mat_cb->Release();
+        render_ctx->frame_resources[i].mat_data_buf->Release();
         render_ctx->frame_resources[i].pass_cb->Release();
 
         render_ctx->frame_resources[i].cmd_list_alloc->Release();
@@ -3018,6 +3001,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // -- consume var to avoid warning
         dxgiGetDebugInterface = dxgiGetDebugInterface;
     }
+
+    ::free(global_camera);
+
 #pragma endregion Cleanup_And_Debug
 
     return 0;

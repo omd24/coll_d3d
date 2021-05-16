@@ -31,10 +31,17 @@ struct Light {
 struct ObjectConstants {
     XMFLOAT4X4 world;
     XMFLOAT4X4 tex_transform;
+    
     XMFLOAT2 displacement_texel_size;
     float grid_spatial_step;
     float pad;
-    float padding[28];  // Padding so the constant buffer is 256-byte aligned
+
+    UINT mat_index;
+    UINT obj_pad0;
+    UINT obj_pad1;
+    UINT obj_pad2;
+
+    float padding[24];  // Padding so the constant buffer is 256-byte aligned
 };
 static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
 // -- per pass constants
@@ -84,7 +91,7 @@ struct GeomVertex {
 };
 
 // -- relevant material data in cbuffer
-struct MaterialConstants {
+struct MaterialData {
     XMFLOAT4    diffuse_albedo;
     XMFLOAT3    fresnel_r0;
     float       roughness;
@@ -92,9 +99,14 @@ struct MaterialConstants {
     // used in texture mapping
     XMFLOAT4X4  mat_transform;
 
-    float padding[40];  // Padding so the constant buffer is 256-byte aligned
+    UINT        diffuse_map_index;
+    UINT        mat_pad0;
+    UINT        mat_pad1;
+    UINT        mat_pad2;
+
+    float padding[36];  // Padding so the structured buffer is 256-byte aligned
 };
-static_assert(256 == sizeof(MaterialConstants), "Constant buffer size must be 256b aligned");
+static_assert(256 == sizeof(MaterialData), "Structured buffer size must be 256b aligned");
 
 // NOTE(omid): A production 3D engine would likely create a hierarchy of Materials.
 // -- simple struct to represent a material. 
@@ -140,9 +152,9 @@ struct FrameResource {
     PassConstants pass_cb_data;
     uint8_t * pass_cb_data_ptr;
 
-    ID3D12Resource * mat_cb;
-    MaterialConstants mat_cb_data;
-    uint8_t * mat_cb_data_ptr;
+    ID3D12Resource * mat_data_buf;
+    MaterialData mat_data;
+    uint8_t * mat_data_buf_ptr;
 
     ID3D12Resource * obj_cb;
     ObjectConstants obj_cb_data;

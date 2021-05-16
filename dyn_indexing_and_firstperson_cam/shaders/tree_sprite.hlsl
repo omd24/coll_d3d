@@ -53,7 +53,7 @@ cbuffer PerPassConstantBuffer : register(b1) {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light global_lights[MAX_LIGHTS];
 }
-cbuffer MaterialConstantBuffer : register(b2) {
+cbuffer MaterialConstantBuffer : register(b2){
     float4 global_diffuse_albedo;
     float3 global_fresnel_r0;
     float global_roughness;
