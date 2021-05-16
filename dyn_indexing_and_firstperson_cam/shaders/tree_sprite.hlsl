@@ -10,7 +10,24 @@
 
 #include "light_utils.hlsl"
 
+struct MaterialData {
+    float4 diffuse_albedo;
+    float3 fresnel_r0;
+    float roughness;
+    float4x4 mat_transform;
+
+    uint diffuse_map_index;
+    uint mat_pad0;
+    uint mat_pad1;
+    uint mat_pad2;
+};
+
 Texture2DArray global_tree_map_array : register(t0);
+
+
+// use space1 to avoid overlap wth texture array (in space0)
+StructuredBuffer<MaterialData> global_mat_data_array : register(t0, space1);
+
 
 SamplerState global_sam_point_wrap : register(s0);
 SamplerState global_sam_point_clamp : register(s1);
@@ -22,6 +39,14 @@ SamplerState global_sam_anisotropic_clamp : register(s5);
 cbuffer PerObjectConstantBuffer : register(b0) {
     float4x4 global_world;
     float4x4 global_tex_transform;
+    float2 global_displacement_map_texel_size;
+    float global_grid_spatial_step;
+    float cb_per_obj_pad1;
+
+    uint global_mat_index;
+    uint obj_pad0;
+    uint obj_pad1;
+    uint obj_pad2;
 }
 cbuffer PerPassConstantBuffer : register(b1) {
     float4x4 global_view;
@@ -53,12 +78,6 @@ cbuffer PerPassConstantBuffer : register(b1) {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light global_lights[MAX_LIGHTS];
 }
-cbuffer MaterialConstantBuffer : register(b2){
-    float4 global_diffuse_albedo;
-    float3 global_fresnel_r0;
-    float global_roughness;
-    float4x4 global_mat_transform;
-};
 
 struct VertexShaderInput {
     float3 pos_world : POSITION;
@@ -135,9 +154,18 @@ GS_Main (
 float4
 PS_Main (GeoShaderOutput pin) : SV_Target {
     
+    // fetch material data
+    MaterialData mat_data = global_mat_data_array[global_mat_index];
+    
+    // extract data
+    float4 diffuse_albedo = mat_data.diffuse_albedo;
+    uint diffuse_tex_index = mat_data.diffuse_map_index;
+    float roughness = mat_data.roughness;
+    float3 fresnel_r0 = mat_data.fresnel_r0;
+    
     float3 uvw = float3(pin.texc, pin.primt_Id % 3);
-    float4 diffuse_albedo =
-        global_tree_map_array.Sample(global_sam_anisotropic_wrap, uvw) * global_diffuse_albedo;
+    diffuse_albedo *=
+        global_tree_map_array.Sample(global_sam_anisotropic_wrap, uvw);
 
 #ifdef ALPHA_TEST
     clip(diffuse_albedo.a - 0.1f);
@@ -154,8 +182,8 @@ PS_Main (GeoShaderOutput pin) : SV_Target {
     // indirect lighting
     float4 ambient = global_ambient_light * diffuse_albedo;
 
-    const float shininess = 1.0f - global_roughness;
-    Material mat = { diffuse_albedo, global_fresnel_r0, shininess };
+    const float shininess = 1.0f - roughness;
+    Material mat = { diffuse_albedo, fresnel_r0, shininess };
     float3 shadow_factor = 1.0f;
     float4 direct_light = compute_lighting(
         global_lights, mat, pin.pos_world, pin.normal_world, to_eye, shadow_factor

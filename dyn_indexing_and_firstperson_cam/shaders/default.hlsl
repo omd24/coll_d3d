@@ -24,7 +24,7 @@ struct MaterialData {
 
 // array of textures
 // unlike Texture2DArray, the textures can be different sizes and formats
-// 5 is number of textures
+// 5 is the number of textures
 Texture2D global_diffuse_map_array[5] : register(t0);
 
 // use space1 to avoid overlap wth texture array (in space0)
