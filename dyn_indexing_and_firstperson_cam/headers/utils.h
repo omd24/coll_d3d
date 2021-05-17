@@ -90,7 +90,6 @@ struct GeomVertex {
     XMFLOAT2 TexC;
 };
 
-// -- relevant material data in cbuffer
 struct MaterialData {
     XMFLOAT4    diffuse_albedo;
     XMFLOAT3    fresnel_r0;

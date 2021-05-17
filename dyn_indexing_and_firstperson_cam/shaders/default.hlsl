@@ -31,7 +31,8 @@ Texture2D global_diffuse_map_array[5] : register(t0);
 StructuredBuffer<MaterialData> global_mat_data_array : register(t0, space1);
 
 // waves displacement map
-Texture2D global_displacement_map : register(t1);
+// NOTE(omid): The 5 elements of texture array occupy registers t0, t1, t2, t3 and t4
+Texture2D global_displacement_map : register(t5);
 
 SamplerState global_sam_point_wrap : register(s0);
 SamplerState global_sam_point_clamp : register(s1);
