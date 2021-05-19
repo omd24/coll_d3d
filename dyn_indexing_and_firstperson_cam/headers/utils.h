@@ -47,20 +47,19 @@ static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b
 // -- per pass constants
 struct PassConstants {
     XMFLOAT4X4 view;
-    XMFLOAT4X4 inverse_view;
+    XMFLOAT4X4 inv_view;
     XMFLOAT4X4 proj;
-    XMFLOAT4X4 inverse_proj;
+    XMFLOAT4X4 inv_proj;
     XMFLOAT4X4 view_proj;
-    XMFLOAT4X4 inverse_view_proj;
+    XMFLOAT4X4 inv_view_proj;
     XMFLOAT3 eye_posw;
     float cbuffer_per_obj_pad1;
     XMFLOAT2 render_target_size;
-    XMFLOAT2 inverse_render_target_size;
+    XMFLOAT2 inv_render_target_size;
     float nearz;
     float farz;
     float total_time;
     float delta_time;
-
     XMFLOAT4 ambient_light;
 
     XMFLOAT4 fog_color;
@@ -78,6 +77,18 @@ struct PassConstants {
 };
 static_assert(1280 == sizeof(PassConstants), "Constant buffer size must be 256b aligned");
 
+struct MaterialData {
+    XMFLOAT4    diffuse_albedo;
+    XMFLOAT3    fresnel_r0;
+    float       roughness;
+    XMFLOAT4X4  mat_transform;
+
+    UINT        diffuse_map_index;
+    UINT        mat_pad0;
+    UINT        mat_pad1;
+    UINT        mat_pad2;
+};
+
 struct Vertex {
     XMFLOAT3 position;
     XMFLOAT3 normal;
@@ -89,23 +100,6 @@ struct GeomVertex {
     XMFLOAT3 TangentU;
     XMFLOAT2 TexC;
 };
-
-struct MaterialData {
-    XMFLOAT4    diffuse_albedo;
-    XMFLOAT3    fresnel_r0;
-    float       roughness;
-
-    // used in texture mapping
-    XMFLOAT4X4  mat_transform;
-
-    UINT        diffuse_map_index;
-    UINT        mat_pad0;
-    UINT        mat_pad1;
-    UINT        mat_pad2;
-
-    float padding[36];  // Padding so the structured buffer is 256-byte aligned
-};
-static_assert(256 == sizeof(MaterialData), "Structured buffer size must be 256b aligned");
 
 // NOTE(omid): A production 3D engine would likely create a hierarchy of Materials.
 // -- simple struct to represent a material. 

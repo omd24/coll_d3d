@@ -109,8 +109,13 @@ enum TEX_INDEX {
     TEX_WIREFENCE = 3,
     TEX_TREEARRAY = 4,
 
+    TEX_TREEARRAY_ELEMENT_1 = 4,
+    TEX_TREEARRAY_ELEMENT_2 = 5,
+    TEX_TREEARRAY_ELEMENT_3 = 6,
+
     _COUNT_TEX
 };
+static unsigned tex_array_additional_elements = 2;
 enum SAMPLER_INDEX {
     SAMPLER_POINT_WRAP = 0,
     SAMPLER_POINT_CLAMP = 1,
@@ -152,7 +157,6 @@ bool global_imgui_enabled = true;
 #else
 bool global_imgui_enabled = false;
 #endif // defined(ENABLE_DEARIMGUI)
-
 
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
@@ -774,18 +778,45 @@ create_descriptor_heaps (
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
     render_ctx->device->CreateShaderResourceView(wire_tex, &srv_desc, descriptor_cpu_handle);
 
+    // NOTE(omid): Chopping off Texture2DArray into separate textures
     // tree_array texture
-    ID3D12Resource * tree_tex = render_ctx->textures[TEX_TREEARRAY].resource;
+    ID3D12Resource * tree_tex1 = render_ctx->textures[TEX_TREEARRAY].resource;
     memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = tree_tex->GetDesc().Format;
+    srv_desc.Format = tree_tex1->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
     srv_desc.Texture2DArray.MostDetailedMip = 0;
-    srv_desc.Texture2DArray.MipLevels = tree_tex->GetDesc().MipLevels;
+    srv_desc.Texture2DArray.MipLevels = tree_tex1->GetDesc().MipLevels;
     srv_desc.Texture2DArray.FirstArraySlice = 0;
-    srv_desc.Texture2DArray.ArraySize = tree_tex->GetDesc().DepthOrArraySize;
+    srv_desc.Texture2DArray.ArraySize = 1; /*tree_tex1->GetDesc().DepthOrArraySize;*/
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(tree_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(tree_tex1, &srv_desc, descriptor_cpu_handle);
+
+    // tree_array texture
+    ID3D12Resource * tree_tex2 = render_ctx->textures[TEX_TREEARRAY].resource;
+    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Format = tree_tex2->GetDesc().Format;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv_desc.Texture2DArray.MostDetailedMip = 0;
+    srv_desc.Texture2DArray.MipLevels = tree_tex2->GetDesc().MipLevels;
+    srv_desc.Texture2DArray.FirstArraySlice = 1;
+    srv_desc.Texture2DArray.ArraySize = 1;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
+    render_ctx->device->CreateShaderResourceView(tree_tex2, &srv_desc, descriptor_cpu_handle);
+
+    // tree_array texture
+    ID3D12Resource * tree_tex3 = render_ctx->textures[TEX_TREEARRAY].resource;
+    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Format = tree_tex3->GetDesc().Format;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv_desc.Texture2DArray.MostDetailedMip = 0;
+    srv_desc.Texture2DArray.MipLevels = tree_tex3->GetDesc().MipLevels;
+    srv_desc.Texture2DArray.FirstArraySlice = 2;
+    srv_desc.Texture2DArray.ArraySize = 1;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
+    render_ctx->device->CreateShaderResourceView(tree_tex3, &srv_desc, descriptor_cpu_handle);
 
     //
     // Create GpuWaves descriptors
@@ -959,12 +990,12 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     tex_table.RegisterSpace = 0;
     tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // NOTE(omid): The 5 elements of texture array occupy registers t0, t1, t2, t3 and t4
+    // NOTE(omid): The 7 elements of array of textures occupy registers t0, t1, t2, t3 and t4, t5, t6 (three last element are Texture2DArray elements)
 
     D3D12_DESCRIPTOR_RANGE displacement_map_table = {};
     displacement_map_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     displacement_map_table.NumDescriptors = 1;
-    displacement_map_table.BaseShaderRegister = _COUNT_TEX; // t5
+    displacement_map_table.BaseShaderRegister = _COUNT_TEX; // t7
     displacement_map_table.RegisterSpace = 0;
     displacement_map_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -1225,7 +1256,13 @@ compile_shader (wchar_t * path, wchar_t const * entry_point, wchar_t const * sha
         IDxcIncludeHandler * include_handler = nullptr;
         dxc_lib->CreateIncludeHandler(&include_handler);
 
-        ret = dxc_compiler->Compile(shader_blob_encoding, path, entry_point, shader_model, nullptr, 0, defines, n_defines, include_handler, &dxc_res);
+        LPCWSTR args [] = {_T("-Zi"), _T("-Od")};
+
+        ret = dxc_compiler->Compile(
+            shader_blob_encoding, path, entry_point, shader_model,
+            args, _countof(args),
+            defines, n_defines, include_handler, &dxc_res
+        );
         dxc_res->GetStatus(&ret);
         dxc_res->GetResult(out_shader_ptr);
         if (FAILED(ret)) {
@@ -1575,15 +1612,15 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMMATRIX inv_view_proj = XMMatrixInverse(&det_view_proj, view_proj);
 
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view, XMMatrixTranspose(view));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view, XMMatrixTranspose(inv_view));
+    XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_view, XMMatrixTranspose(inv_view));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.proj, XMMatrixTranspose(proj));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_proj, XMMatrixTranspose(inv_proj));
+    XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_proj, XMMatrixTranspose(inv_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view_proj, XMMatrixTranspose(inv_view_proj));
+    XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_view_proj, XMMatrixTranspose(inv_view_proj));
     render_ctx->main_pass_constants.eye_posw = Camera_GetPosition3f(global_camera);
 
     render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)global_scene_ctx.width, (float)global_scene_ctx.height);
-    render_ctx->main_pass_constants.inverse_render_target_size = XMFLOAT2(1.0f / global_scene_ctx.width, 1.0f / global_scene_ctx.height);
+    render_ctx->main_pass_constants.inv_render_target_size = XMFLOAT2(1.0f / global_scene_ctx.width, 1.0f / global_scene_ctx.height);
     render_ctx->main_pass_constants.nearz = 1.0f;
     render_ctx->main_pass_constants.farz = 1000.0f;
     render_ctx->main_pass_constants.delta_time = timer->delta_time;
@@ -1863,7 +1900,7 @@ draw_stylized (
 ) {
     HRESULT ret = E_FAIL;
 
-#if 0
+#if 1
 
 
     UINT frame_index = render_ctx->frame_index;
@@ -1910,16 +1947,24 @@ draw_stylized (
 
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
-    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
-    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv); // set displacement map
+    cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb->GetGPUVirtualAddress());
+
+    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
+    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].mat_data_buf;
+    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
+
+    // Bind all textures. We only specify the first descriptor in the table
+    // Root sig knows how many descriptors we have in the table
+    cmdlist->SetGraphicsRootDescriptorTable(3, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+
+     // set displacement map for waves
+    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv);
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->opaque_ritems, frame_index
     );
     // 2. draw alpha-tested box/crate
@@ -1927,9 +1972,7 @@ draw_stylized (
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->alphatested_ritems, frame_index
     );
     // 3. draw tree-sprites
@@ -1937,9 +1980,7 @@ draw_stylized (
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->alphatested_treesprites_ritems, frame_index
     );
     // 4. draw gpu waves
@@ -1947,9 +1988,7 @@ draw_stylized (
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
         &render_ctx->gpu_waves_rtimes, frame_index
     );
 
@@ -2866,10 +2905,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::Render();
 
                 // choose box material
-                if (0 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-                else if (1 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
+                if (0 == i_box_mat) {
+                    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WOOD_CRATE];
+                    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
+                } else if (1 == i_box_mat) {
+                    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WIRED_CRATE];
+                    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
+                }
                 // control mouse activation
                 global_mouse_active = !(beginwnd || sliderf || coloredit || sliderint);
             }
@@ -2886,7 +2928,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 if (!stylized_sobel) {
                     CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                } else if (false) {
+                } else if (stylized_sobel) {
                     CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 }
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
@@ -2960,7 +3002,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     render_ctx->depth_stencil_buffer->Release();
 
-    for (unsigned i = 0; i < _COUNT_TEX; i++) {
+    for (unsigned i = 0; i < (_COUNT_TEX - tex_array_additional_elements); i++) {
         render_ctx->textures[i].upload_heap->Release();
         render_ctx->textures[i].resource->Release();
     }

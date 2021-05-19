@@ -24,15 +24,15 @@ struct MaterialData {
 
 // array of textures
 // unlike Texture2DArray, the textures can be different sizes and formats
-// 5 is the number of textures
-Texture2D global_diffuse_map_array[5] : register(t0);
+// 8 is the number of textures (4 + 3elements of texture array)
+Texture2D global_diffuse_maps[7] : register(t0);
 
 // use space1 to avoid overlap wth texture array (in space0)
-StructuredBuffer<MaterialData> global_mat_data_array : register(t0, space1);
+StructuredBuffer<MaterialData> global_mat_data : register(t0, space1);
 
 // waves displacement map
-// NOTE(omid): The 5 elements of texture array occupy registers t0, t1, t2, t3 and t4
-Texture2D global_displacement_map : register(t5);
+// NOTE(omid): The 5 elements of texture array occupy registers t0, t1, t2, t3 and t4, t5, t6
+Texture2D global_displacement_map : register(t7);
 
 SamplerState global_sam_point_wrap : register(s0);
 SamplerState global_sam_point_clamp : register(s1);
@@ -44,6 +44,7 @@ SamplerState global_sam_anisotropic_clamp : register(s5);
 cbuffer PerObjectConstantBuffer : register(b0){
     float4x4 global_world;
     float4x4 global_tex_transform;
+    
     float2 global_displacement_map_texel_size;
     float global_grid_spatial_step;
     float cb_per_obj_pad1;
@@ -114,7 +115,7 @@ VertexShader_Main (VertexShaderInput vin) {
 #endif
     
     // fetch material data
-    MaterialData mat_data = global_mat_data_array[global_mat_index];
+    MaterialData mat_data = global_mat_data[global_mat_index];
     
     // transform to world space
     float4 pos_world = mul(float4(vin.pos_local, 1.0f), global_world);
@@ -135,7 +136,7 @@ VertexShader_Main (VertexShaderInput vin) {
 float4
 PixelShader_Main (VertexShaderOutput pin) : SV_Target{
     // fetch material data
-    MaterialData mat_data = global_mat_data_array[global_mat_index];
+    MaterialData mat_data = global_mat_data[global_mat_index];
     
     // extract data
     float4 diffuse_albedo = mat_data.diffuse_albedo;
@@ -145,7 +146,7 @@ PixelShader_Main (VertexShaderOutput pin) : SV_Target{
     
     // dynamically look up the texture in the array
     diffuse_albedo *=
-        global_diffuse_map_array[diffuse_tex_index].Sample(global_sam_anisotropic_wrap, pin.texc);
+        global_diffuse_maps[diffuse_tex_index].Sample(global_sam_anisotropic_wrap, pin.texc);
 
 #ifdef ALPHA_TEST
     clip(diffuse_albedo.a - 0.1f);

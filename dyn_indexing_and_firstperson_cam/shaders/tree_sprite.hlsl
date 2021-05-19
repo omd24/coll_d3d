@@ -22,8 +22,8 @@ struct MaterialData {
     uint mat_pad2;
 };
 
-Texture2DArray global_tree_map_array : register(t0);
-
+//Texture2DArray global_tree_maps : register(t0);
+Texture2D global_diffuse_maps[7] : register(t0);
 
 // use space1 to avoid overlap wth texture array (in space0)
 StructuredBuffer<MaterialData> global_mat_data_array : register(t0, space1);
@@ -163,9 +163,13 @@ PS_Main (GeoShaderOutput pin) : SV_Target {
     float roughness = mat_data.roughness;
     float3 fresnel_r0 = mat_data.fresnel_r0;
     
-    float3 uvw = float3(pin.texc, pin.primt_Id % 3);
+    //float3 uvw = float3(pin.texc, pin.primt_Id % 3);
+    //diffuse_albedo *=
+    //    global_tree_maps.Sample(global_sam_anisotropic_wrap, uvw);
+
+    // dynamically look up the texture in the array
     diffuse_albedo *=
-        global_tree_map_array.Sample(global_sam_anisotropic_wrap, uvw);
+        global_diffuse_maps[diffuse_tex_index + pin.primt_Id % 3].Sample(global_sam_anisotropic_wrap, pin.texc);
 
 #ifdef ALPHA_TEST
     clip(diffuse_albedo.a - 0.1f);
