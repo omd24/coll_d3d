@@ -4,7 +4,7 @@
 static void
 calc_gauss_weights (BlurFilter * filter, float sigma, float out_weights [], size_t weight_count) {
     int r = (int)ceilf(2.0f * sigma);
-    _ASSERT_EXPR(weight_count == (2 * r + 1), _T("Invalid weight counts"));
+    _ASSERT_EXPR(weight_count == static_cast<size_t>(2 * r + 1), _T("Invalid weight counts"));
     _ASSERT_EXPR(r <= filter->blur_radius_max, _T("Invalid blur radius"));
 
     float two_sigma2 = 2.0f * sigma * sigma;

@@ -27,19 +27,15 @@ struct Light {
 
 #define MAX_LIGHTS  16
 
-// -- per object constants
-struct ObjectConstants {
+struct InstanceData {
     XMFLOAT4X4 world;
     XMFLOAT4X4 tex_transform;
 
     UINT mat_index;
-    UINT obj_pad0;
-    UINT obj_pad1;
-    UINT obj_pad2;
-
-    float padding[28];  // Padding so the constant buffer is 256-byte aligned
+    UINT instance_pad0;
+    UINT instance_pad1;
+    UINT instance_pad2;
 };
-static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
 // -- per pass constants
 struct PassConstants {
     XMFLOAT4X4 view;
@@ -138,13 +134,13 @@ struct FrameResource {
     // We cannot update a cbuffer until the GPU is done processing the commands
     // that reference it.  So each frame needs their own cbuffers.
     ID3D12Resource * pass_cb;
-    uint8_t * pass_cb_data_ptr;
+    uint8_t * pass_cb_ptr;
 
-    ID3D12Resource * mat_data_buf;
-    uint8_t * mat_data_buf_ptr;
+    ID3D12Resource * material_sbuffer;
+    uint8_t * material_ptr;
 
-    ID3D12Resource * obj_cb;
-    uint8_t * obj_cb_data_ptr;
+    ID3D12Resource * instance_sbuffer;
+    uint8_t * instance_ptr;
 
     // Fence value to mark commands up to this fence point.  This lets us
     // check if these frame resources are still in use by the GPU.
@@ -175,8 +171,11 @@ struct RenderItem {
 
     // DrawIndexedInstanced parameters.
     UINT index_count;
+    UINT instance_count;
     UINT start_index_loc;
     int base_vertex_loc;
+
+    BoundingBox bounds;
 
     Material * mat;
     MeshGeometry * geometry;
@@ -303,10 +302,10 @@ update_subresources_heap (
     D3D12_RESOURCE_DESC intermediate_desc = intermediate->GetDesc();
     D3D12_RESOURCE_DESC destination_desc = dest_resource->GetDesc();
     _ASSERT_EXPR(!(intermediate_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
-                         intermediate_desc.Width < required_size + layouts[0].Offset ||
-                         required_size > (SIZE_T) - 1 ||
-                         (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
-                          (first_subresource != 0 || n_subresources != 1))), _T("validation failed!"));
+                   intermediate_desc.Width < required_size + layouts[0].Offset ||
+                   required_size > (SIZE_T) - 1 ||
+                   (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
+                    (first_subresource != 0 || n_subresources != 1))), _T("validation failed!"));
 
     BYTE * data;
     /*_ASSERT_EXPR*/(intermediate->Map(0, NULL, reinterpret_cast<void**>(&data)), _T("Mapping intermediate resource failed"));
