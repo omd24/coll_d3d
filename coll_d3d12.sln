@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.31229.75
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dyn_indexing_and_firstperson_cam", "dyn_indexing_and_firstperson_cam\dyn_indexing_and_firstperson_cam.vcxproj", "{7FE492CD-C154-4B42-9620-300B52B670A0}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "instancing_and_frustum_culling", "instancing_and_frustum_culling\instancing_and_frustum_culling.vcxproj", "{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,14 @@ Global
 		{7FE492CD-C154-4B42-9620-300B52B670A0}.Release|x64.Build.0 = Release|x64
 		{7FE492CD-C154-4B42-9620-300B52B670A0}.Release|x86.ActiveCfg = Release|Win32
 		{7FE492CD-C154-4B42-9620-300B52B670A0}.Release|x86.Build.0 = Release|Win32
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Debug|x64.ActiveCfg = Debug|x64
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Debug|x64.Build.0 = Debug|x64
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Debug|x86.ActiveCfg = Debug|Win32
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Debug|x86.Build.0 = Debug|Win32
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x64.ActiveCfg = Release|x64
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x64.Build.0 = Release|x64
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x86.ActiveCfg = Release|Win32
+		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
