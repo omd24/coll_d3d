@@ -41,10 +41,6 @@ SamplerState global_sam_anisotropic_clamp : register(s5);
 cbuffer PerObjectConstantBuffer : register(b0){
     float4x4 global_world;
     float4x4 global_tex_transform;
-    
-    float2 global_displacement_map_texel_size;
-    float global_grid_spatial_step;
-    float cb_per_obj_pad1;
 
     uint global_mat_index;
     uint obj_pad0;

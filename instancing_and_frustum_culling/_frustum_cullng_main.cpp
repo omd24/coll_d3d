@@ -1,3 +1,16 @@
+/* ===========================================================
+   #File: _frustum_cullng_main.cpp #
+   #Date: 24 May 2021 #
+   #Revision: 1.0 #
+   #Creator: Omid Miresmaeili #
+   #Description: Hardware instancing and frustum culling #
+   #Notice: (C) Copyright 2021 by Omid. All Rights Reserved. #
+   =========================================================== */
+
+#pragma warning (disable: 28182)    // pointer can be NULL.
+#pragma warning (disable: 6011)     // dereferencing a potentially null pointer
+#pragma warning (disable: 26495)    // not initializing struct members
+
 #include "headers/common.h"
 
 #include <dxgi1_6.h>
@@ -35,10 +48,6 @@
 #endif
 
 #define ENABLE_DEARIMGUI
-
-#pragma warning (disable: 28182)    // pointer can be NULL.
-#pragma warning (disable: 6011)     // dereferencing a potentially null pointer
-#pragma warning (disable: 26495)    // not initializing struct members
 
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
@@ -94,7 +103,6 @@ enum TEX_INDEX {
 
     _COUNT_TEX
 };
-static unsigned tex_array_additional_elements = 2;
 enum SAMPLER_INDEX {
     SAMPLER_POINT_WRAP = 0,
     SAMPLER_POINT_CLAMP = 1,
@@ -583,10 +591,10 @@ create_descriptor_heaps (
     //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_blur = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
     hcpu_blur.ptr +=
-        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_blur = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
     hgpu_blur.ptr +=
-        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
     BlurFilter_CreateDescriptors(blur, hcpu_blur, hgpu_blur, render_ctx->cbv_srv_uav_descriptor_size);
 
 
@@ -595,10 +603,10 @@ create_descriptor_heaps (
     //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_sobel = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
     hcpu_sobel.ptr +=
-        (_COUNT_TEX + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_sobel = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
     hgpu_sobel.ptr +=
-        (_COUNT_TEX + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     SobelFilter_CreateDescriptors(sobel, hcpu_sobel, hgpu_sobel, render_ctx->cbv_srv_uav_descriptor_size);
 
     //
@@ -614,13 +622,13 @@ create_descriptor_heaps (
     //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_offscreen_rt = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
     hcpu_offscreen_rt.ptr +=
-        (_COUNT_TEX + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_offscreen_rt = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
     hgpu_offscreen_rt.ptr +=
-        (_COUNT_TEX + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+        static_cast<size_t>(_COUNT_TEX + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     hcpu_rtv.ptr +=
-        (NUM_BACKBUFFERS)*render_ctx->rtv_descriptor_size;
+        static_cast<size_t>(NUM_BACKBUFFERS)*render_ctx->rtv_descriptor_size;
     OffscreenRenderTarget_CreateDescriptors(ort, hcpu_offscreen_rt, hgpu_offscreen_rt, hcpu_rtv);
 
     // Create Depth Stencil View Descriptor Heap
@@ -2205,7 +2213,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #pragma endregion
 
-#pragma region Create CBuffers MaterialData Buffers
+#pragma region Create CBuffers, MaterialData and InstanceData Buffers
     UINT obj_cb_size = sizeof(ObjectConstants);
     UINT mat_data_size = sizeof(MaterialData);
     UINT pass_cb_size = sizeof(PassConstants);
@@ -2213,18 +2221,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // -- create a cmd-allocator for each frame
         res = render_ctx->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&render_ctx->frame_resources[i].cmd_list_alloc));
 
-        // -- create cbuffers as upload_buffer
         create_upload_buffer(render_ctx->device, (UINT64)obj_cb_size * _COUNT_RENDERITEM, &render_ctx->frame_resources[i].obj_cb_data_ptr, &render_ctx->frame_resources[i].obj_cb);
-        // Initialize cb data
-        ::memcpy(render_ctx->frame_resources[i].obj_cb_data_ptr, &render_ctx->frame_resources[i].obj_cb_data, sizeof(render_ctx->frame_resources[i].obj_cb_data));
 
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].mat_data_buf_ptr, &render_ctx->frame_resources[i].mat_data_buf);
-        // Initialize cb data
-        ::memcpy(render_ctx->frame_resources[i].mat_data_buf_ptr, &render_ctx->frame_resources[i].mat_data, sizeof(render_ctx->frame_resources[i].mat_data));
 
         create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb);
-        // Initialize cb data
-        ::memcpy(render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb_data, sizeof(render_ctx->frame_resources[i].pass_cb_data));
     }
 #pragma endregion
 
@@ -2329,7 +2330,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         // calculate imgui cpu & gpu handles on location on srv_heap
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * static_cast<size_t>(
             _COUNT_TEX +
             4 +     /* Blur descriptors     */
             2 +     /* Sobel descriptors    */
@@ -2337,7 +2338,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * static_cast<size_t>(
             _COUNT_TEX +
             4 +     /* Blur descriptors     */
             2 +     /* Sobel descriptors    */
@@ -2513,7 +2514,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     render_ctx->depth_stencil_buffer->Release();
 
-    for (unsigned i = 0; i < (_COUNT_TEX - tex_array_additional_elements); i++) {
+    for (unsigned i = 0; i < (_COUNT_TEX); i++) {
         render_ctx->textures[i].upload_heap->Release();
         render_ctx->textures[i].resource->Release();
     }

@@ -31,17 +31,13 @@ struct Light {
 struct ObjectConstants {
     XMFLOAT4X4 world;
     XMFLOAT4X4 tex_transform;
-    
-    XMFLOAT2 displacement_texel_size;
-    float grid_spatial_step;
-    float pad;
 
     UINT mat_index;
     UINT obj_pad0;
     UINT obj_pad1;
     UINT obj_pad2;
 
-    float padding[24];  // Padding so the constant buffer is 256-byte aligned
+    float padding[28];  // Padding so the constant buffer is 256-byte aligned
 };
 static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
 // -- per pass constants
@@ -142,15 +138,12 @@ struct FrameResource {
     // We cannot update a cbuffer until the GPU is done processing the commands
     // that reference it.  So each frame needs their own cbuffers.
     ID3D12Resource * pass_cb;
-    PassConstants pass_cb_data;
     uint8_t * pass_cb_data_ptr;
 
     ID3D12Resource * mat_data_buf;
-    MaterialData mat_data;
     uint8_t * mat_data_buf_ptr;
 
     ID3D12Resource * obj_cb;
-    ObjectConstants obj_cb_data;
     uint8_t * obj_cb_data_ptr;
 
     // Fence value to mark commands up to this fence point.  This lets us
