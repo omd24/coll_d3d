@@ -47,7 +47,7 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_DEARIMGUI
+#define ENABLE_DEARIMGUI_
 
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
@@ -473,9 +473,9 @@ create_render_items (D3DRenderContext * render_ctx) {
     float dx = width / (n - 1);
     float dy = height / (n - 1);
     float dz = depth / (n - 1);
-    for (int k = 0; k < n; ++k) 	{
-        for (int i = 0; i < n; ++i) 		{
-            for (int j = 0; j < n; ++j) 			{
+    for (int k = 0; k < n; ++k) {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
                 int index = k * n * n + i * n + j;
                 // Position instanced along a 3D grid.
                 global_instance_data[index].world = XMFLOAT4X4(
@@ -1157,16 +1157,16 @@ handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
     float dt = gt->delta_time;
 
     if (GetAsyncKeyState('W') & 0x8000)
-        Camera_Walk(global_camera, 10.0f * dt);
+        Camera_Walk(global_camera, 20.0f * dt);
 
     if (GetAsyncKeyState('S') & 0x8000)
-        Camera_Walk(global_camera, -10.0f * dt);
+        Camera_Walk(global_camera, -20.0f * dt);
 
     if (GetAsyncKeyState('A') & 0x8000)
-        Camera_Strafe(global_camera, -10.0f * dt);
+        Camera_Strafe(global_camera, -20.0f * dt);
 
     if (GetAsyncKeyState('D') & 0x8000)
-        Camera_Strafe(global_camera, 10.0f * dt);
+        Camera_Strafe(global_camera, 20.0f * dt);
 
     Camera_UpdateViewMatrix(global_camera);
 }
@@ -1292,23 +1292,23 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 static void
 animate_material (Material * mat, GameTimer * timer) {
     // Scroll the water material texture coordinates.
-    float& tu = mat->mat_transform(3, 0);
-    float& tv = mat->mat_transform(3, 1);
+    //float& tu = mat->mat_transform(3, 0);
+    //float& tv = mat->mat_transform(3, 1);
 
-    tu += 0.1f * timer->delta_time;
-    tv += 0.02f * timer->delta_time;
+    //tu += 0.1f * timer->delta_time;
+    //tv += 0.02f * timer->delta_time;
 
-    if (tu >= 1.0f)
-        tu -= 1.0f;
+    //if (tu >= 1.0f)
+    //    tu -= 1.0f;
 
-    if (tv >= 1.0f)
-        tv -= 1.0f;
+    //if (tv >= 1.0f)
+    //    tv -= 1.0f;
 
-    mat->mat_transform(3, 0) = tu;
-    mat->mat_transform(3, 1) = tv;
+    //mat->mat_transform(3, 0) = tu;
+    //mat->mat_transform(3, 1) = tv;
 
-    // Material has changed, so need to update cbuffer.
-    mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    //// Material has changed, so need to update cbuffer.
+    //mat->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static HRESULT
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
@@ -1326,10 +1326,10 @@ move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT 
     *out_backbuffer_index = (*out_backbuffer_index + 1) % NUM_BACKBUFFERS;
     *out_frame_index = (render_ctx->frame_index + 1) % NUM_QUEUING_FRAMES;
 
+    ...
     // -- 3. if the next frame is not ready to be rendered yet, wait until it is ready
-    if (render_ctx->fence->GetCompletedValue() < render_ctx->frame_resources[frame_index].fence) {
+    if (render_ctx->frame_resources[frame_index].fence != 0 && render_ctx->fence->GetCompletedValue() < render_ctx->frame_resources[frame_index].fence) {
         ret = render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[frame_index].fence, render_ctx->fence_event);
-        CHECK_AND_FAIL(ret);
         WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
     }
 
@@ -1675,8 +1675,8 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
 
     // -- initialize fog data
     render_ctx->main_pass_constants.fog_color = {0.7f, 0.7f, 0.7f, 1.0f};
-    render_ctx->main_pass_constants.fog_start = 5.0f;
-    render_ctx->main_pass_constants.fog_range = 150.0f;
+    render_ctx->main_pass_constants.fog_start = 1000.0f;
+    render_ctx->main_pass_constants.fog_range = 1000.0f;
 
     // -- initialize light data
     render_ctx->main_pass_constants.lights[0].strength = {.5f,.5f,.5f};
@@ -1707,6 +1707,55 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     // -- 4x MSAA enabled ?
     render_ctx->msaa4x_state = false;
     _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
+}
+static void
+calculate_frame_stats_str (GameTimer * timer, size_t str_count, TCHAR ** out_str) {
+    memset(*out_str, '\0', str_count);
+    // Code computes the average frames per second, and also the 
+    // average time it takes to render one frame.  These stats 
+    // are appended to the window caption bar.
+
+    static int frame_count = 0;
+    static float time_elapsed = 0.0f;
+
+    frame_count++;
+
+    // Compute averages over one second period.
+    if ((Timer_GetTotalTime(timer) - time_elapsed) >= 1.0f) {
+        float fps = (float)frame_count; // fps = frame_count / 1
+        float mspf = 1000.0f / fps;
+
+        TCHAR str[200];
+        int j = _stprintf_s(str, 200, _T("   fps:    %.2f, "), fps);
+        j +=    _stprintf_s(str + j, 200 - (size_t)j, _T("   mspf:    %.2f "), mspf);
+
+        _tcscat_s(*out_str, str_count, str);
+
+        // Reset for next average.
+        frame_count = 0;
+        time_elapsed += 1.0f;
+    }
+}
+static void
+calculate_frame_stats (GameTimer * timer, float * out_fps, float * out_mspf) {
+    // Code computes the average frames per second, and also the 
+    // average time it takes to render one frame.  These stats 
+    // are appended to the window caption bar.
+
+    static int frame_count = 0;
+    static float time_elapsed = 0.0f;
+
+    frame_count++;
+
+    // Compute averages over one second period.
+    if ((Timer_GetTotalTime(timer) - time_elapsed) >= 1.0f) {
+        *out_fps = (float)frame_count; // fps = frame_count / 1
+        *out_mspf = 1000.0f / (*out_fps);
+
+        // Reset for next average.
+        frame_count = 0;
+        time_elapsed += 1.0f;
+    }
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobel, OffscreenRenderTarget * ort) {
@@ -1937,7 +1986,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 1280, 720);
+    SceneContext_Init(&global_scene_ctx, 800, 600);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -2338,6 +2387,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGuiWindowFlags window_flags = 0;
     bool beginwnd, sliderf, coloredit, sliderint;
     int blur_count = 0;
+    int stats_str_count = 50;
+    float fps = 0.0f;
+    float mspf = 0.0f;
+    TCHAR * stats_str = (TCHAR *)malloc(stats_str_count * sizeof(TCHAR));
+    memset(stats_str, '\0', stats_str_count);
     if (global_imgui_enabled) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -2383,7 +2437,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #pragma endregion
 
-        // ========================================================================================================
+
+            // ========================================================================================================
 #pragma region Main_Loop
     global_paused = false;
     global_resizing = false;
@@ -2409,7 +2464,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                     "Fog Distance",
                     &render_ctx->main_pass_constants.fog_start,
                     5.0f,
-                    150.0f
+                    1000.0f
                 );
                 sliderf = ImGui::IsItemActive();
 
@@ -2431,6 +2486,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::Text("\n");
                 ImGui::Separator();
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+                ImGui::Text("Game stats; fps = %.3f, mspf = %.3f ", fps, mspf);
 
                 ImGui::End();
                 ImGui::Render();
@@ -2442,6 +2498,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             Timer_Tick(&global_timer);
 
             if (!global_paused) {
+                calculate_frame_stats(&global_timer, &fps, &mspf);
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
 
                 animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
