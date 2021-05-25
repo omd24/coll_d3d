@@ -1310,33 +1310,29 @@ animate_material (Material * mat, GameTimer * timer) {
     //// Material has changed, so need to update cbuffer.
     //mat->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
-static HRESULT
-move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
+static void
+move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
 
-    HRESULT ret = E_FAIL;
-    UINT frame_index = *out_frame_index;
+    // Cycle through the circular frame resource array.
+    *frame_index = (render_ctx->frame_index + 1) % NUM_QUEUING_FRAMES;
+    FrameResource * curr_frame_resource = &render_ctx->frame_resources[*frame_index];
 
-    // -- 1. schedule a signal command in the queue
-    UINT64 const current_fence_value = render_ctx->frame_resources[frame_index].fence;
-    ret = render_ctx->cmd_queue->Signal(render_ctx->fence, current_fence_value);
-    CHECK_AND_FAIL(ret);
-
-    // -- 2. update frame index
-    //*out_backbuffer_index = render_ctx->swapchain3->GetCurrentBackBufferIndex();
-    *out_backbuffer_index = (*out_backbuffer_index + 1) % NUM_BACKBUFFERS;
-    *out_frame_index = (render_ctx->frame_index + 1) % NUM_QUEUING_FRAMES;
-
-    ...
     // -- 3. if the next frame is not ready to be rendered yet, wait until it is ready
-    if (render_ctx->frame_resources[frame_index].fence != 0 && render_ctx->fence->GetCompletedValue() < render_ctx->frame_resources[frame_index].fence) {
-        ret = render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[frame_index].fence, render_ctx->fence_event);
-        WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
+    if (
+        curr_frame_resource->fence != 0 &&
+        render_ctx->fence->GetCompletedValue() < curr_frame_resource->fence
+    ) {
+        HANDLE event_handle = CreateEventEx(nullptr, nullptr, false, EVENT_ALL_ACCESS);
+        if (0 != event_handle) {
+            render_ctx->fence->SetEventOnCompletion(
+                curr_frame_resource->fence,
+                event_handle
+            );
+            WaitForSingleObject(event_handle, INFINITE);
+            CloseHandle(event_handle);
+        }
+        //WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
     }
-
-    // -- 3. set the fence value for the next frame
-    render_ctx->frame_resources[frame_index].fence = current_fence_value + 1;
-
-    return ret;
 }
 static void
 flush_command_queue (D3DRenderContext * render_ctx) {
@@ -1490,6 +1486,15 @@ draw_main (D3DRenderContext * render_ctx, BlurFilter * blur_filter, UINT blur_co
     render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
 
     render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
+    render_ctx->backbuffer_index = (render_ctx->backbuffer_index + 1) % NUM_BACKBUFFERS;
+
+    // Advance the fence value to mark commands up to this fence point.
+    render_ctx->frame_resources[frame_index].fence = ++render_ctx->main_current_fence;
+
+    // Add an instruction to the command queue to set a new fence point. 
+    // Because we are on the GPU timeline, the new fence point won't be 
+    // set until the GPU finishes processing all the commands prior to this Signal().
+    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
 
     return ret;
 }
@@ -1502,9 +1507,6 @@ draw_stylized (
     SobelFilter * sobel_filter
 ) {
     HRESULT ret = E_FAIL;
-
-#if 1
-
 
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1640,8 +1642,15 @@ draw_stylized (
     render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
 
     render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
+    render_ctx->backbuffer_index = (render_ctx->backbuffer_index + 1) % NUM_BACKBUFFERS;
 
-#endif // 0
+    // Advance the fence value to mark commands up to this fence point.
+    render_ctx->frame_resources[frame_index].fence = ++render_ctx->main_current_fence;
+
+    // Add an instruction to the command queue to set a new fence point. 
+    // Because we are on the GPU timeline, the new fence point won't be 
+    // set until the GPU finishes processing all the commands prior to this Signal().
+    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
 
     return ret;
 }
@@ -2499,8 +2508,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
             if (!global_paused) {
                 calculate_frame_stats(&global_timer, &fps, &mspf);
-                handle_keyboard_input(&global_scene_ctx, &global_timer);
 
+                move_to_next_frame(render_ctx, &render_ctx->frame_index);
+
+                handle_keyboard_input(&global_scene_ctx, &global_timer);
                 animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
                 update_instance_buffer(render_ctx);
                 update_mat_buffer(render_ctx);
@@ -2511,7 +2522,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 } else if (stylized_sobel) {
                     CHECK_AND_FAIL(draw_stylized(render_ctx, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 }
-                CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);
             }
