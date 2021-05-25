@@ -47,7 +47,8 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_DEARIMGUI_
+#define ENABLE_DEARIMGUI
+#define ENABLE_FRUSTUM_CULLING
 
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
@@ -129,6 +130,7 @@ struct SceneContext {
 };
 
 Camera * global_camera;
+BoundingFrustum global_cam_frustum;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
@@ -144,6 +146,12 @@ bool global_imgui_enabled = true;
 #else
 bool global_imgui_enabled = false;
 #endif // defined(ENABLE_DEARIMGUI)
+
+#if defined(ENABLE_FRUSTUM_CULLING)
+bool global_frustumculling_enabled = true;
+#else
+bool global_frustumculling_enabled = false;
+#endif // defined(ENABLE_FRUSTUM_CULLING)
 
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
@@ -227,9 +235,9 @@ load_texture (
     LoadDDSTextureFromFile(device, tex_path, &out_texture->resource, &ddsData, &subresources, &n_subresources);
 
     UINT64 upload_buffer_size = get_required_intermediate_size(out_texture->resource, 0,
-                                                               n_subresources);
+        n_subresources);
 
-   // Create the GPU upload buffer.
+// Create the GPU upload buffer.
     D3D12_HEAP_PROPERTIES heap_props = {};
     heap_props.Type = D3D12_HEAP_TYPE_UPLOAD;
     heap_props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
@@ -346,6 +354,14 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     // -- skip two lines
     fgets(linebuf, sizeof(linebuf), f);
     fgets(linebuf, sizeof(linebuf), f);
+
+    // -- vmin and vmax for AABB construction
+    XMFLOAT3 vminf3(+FLT_MAX, +FLT_MAX, +FLT_MAX);
+    XMFLOAT3 vmaxf3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+    XMVECTOR vmin = XMLoadFloat3(&vminf3);
+    XMVECTOR vmax = XMLoadFloat3(&vmaxf3);
+
     // -- read vertices
     Vertex * vertices = (Vertex *)calloc(vcount, sizeof(Vertex));
     for (unsigned i = 0; i < vcount; i++) {
@@ -382,7 +398,16 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
         vertices[i].texc = {u, v};
 #pragma endregion
 
+        // -- calculate vmin, vmax
+        vmin = XMVectorMin(vmin, P);
+        vmax = XMVectorMax(vmax, P);
     }
+
+    // -- construct bounding box (AABB)
+    BoundingBox bounds;
+    XMStoreFloat3(&bounds.Center, 0.5f * (vmin + vmax));
+    XMStoreFloat3(&bounds.Extents, 0.5f * (vmax - vmin));
+
     // -- skip three lines
     fgets(linebuf, sizeof(linebuf), f);
     fgets(linebuf, sizeof(linebuf), f);
@@ -432,6 +457,7 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     submesh.index_count = tcount * 3;
     submesh.start_index_location = 0;
     submesh.base_vertex_location = 0;
+    submesh.bounds = bounds;
 
     render_ctx->geom[GEOM_SKULL].submesh_names[0] = "skull";
     render_ctx->geom[GEOM_SKULL].submesh_geoms[0] = submesh;
@@ -453,13 +479,14 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_SKULL].index_count = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].index_count;
     render_ctx->all_ritems.ritems[RITEM_SKULL].start_index_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].start_index_location;
     render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].bounds = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].bounds;
     render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
     //render_ctx->all_ritems.ritems[RITEM_SKULL].bounds = ...
 
     // -- generate instance data
-    int const n = 5;
+    int const n = 10;
     max_instance_count = n * n * n;
     global_instance_data = (InstanceData *)::calloc(max_instance_count, sizeof(InstanceData));
 
@@ -1185,8 +1212,9 @@ handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
     scene_ctx->mouse.x = x;
     scene_ctx->mouse.y = y;
 }
-static void
+static int
 update_instance_buffer (D3DRenderContext * render_ctx) {
+    int visible_instance_count = 0;
     _ASSERT_EXPR(global_instance_data, _T("global instance data array not initialized"));
 
     XMMATRIX view = Camera_GetView(global_camera);
@@ -1198,8 +1226,6 @@ update_instance_buffer (D3DRenderContext * render_ctx) {
     uint8_t * instance_begin_ptr = render_ctx->frame_resources[frame_index].instance_ptr;
     for (unsigned i = 0; i < render_ctx->all_ritems.size; i++) {
         if (render_ctx->all_ritems.ritems[i].initialized) {
-
-            int visible_instance_count = 0;
             for (int j = 0; j < max_instance_count; ++j) {
                 XMMATRIX world = XMLoadFloat4x4(&global_instance_data[j].world);
                 XMMATRIX tex_transform = XMLoadFloat4x4(&global_instance_data[j].tex_transform);
@@ -1211,19 +1237,31 @@ update_instance_buffer (D3DRenderContext * render_ctx) {
                 // Frustum Culling
                 //
 
+                // view space to obj's local space
+                XMMATRIX view_to_local = XMMatrixMultiply(inv_view, inv_world);
 
+                // transform camera frustum from view space to obj's local space
+                BoundingFrustum local_camfrustum;
+                global_cam_frustum.Transform(local_camfrustum, view_to_local);
 
-                InstanceData data = {};
-                XMStoreFloat4x4(&data.world, XMMatrixTranspose(world));
-                XMStoreFloat4x4(&data.tex_transform, XMMatrixTranspose(tex_transform));
-                data.mat_index = global_instance_data[j].mat_index;
+                // perform box/frustum intersection test in local space
+                if (
+                    local_camfrustum.Contains(render_ctx->all_ritems.ritems[i].bounds) != DirectX::DISJOINT ||
+                    false == global_frustumculling_enabled
+                ) {
+                    InstanceData data = {};
+                    XMStoreFloat4x4(&data.world, XMMatrixTranspose(world));
+                    XMStoreFloat4x4(&data.tex_transform, XMMatrixTranspose(tex_transform));
+                    data.mat_index = global_instance_data[j].mat_index;
 
-                uint8_t * instance_ptr = instance_begin_ptr + (instance_data_size * visible_instance_count++);
-                memcpy(instance_ptr, &data, instance_data_size);
+                    uint8_t * instance_ptr = instance_begin_ptr + (instance_data_size * visible_instance_count++);
+                    memcpy(instance_ptr, &data, instance_data_size);
+                }
             }
             render_ctx->all_ritems.ritems[i].instance_count = visible_instance_count;
         }
     }
+    return visible_instance_count;
 }
 static void
 update_mat_buffer (D3DRenderContext * render_ctx) {
@@ -1321,7 +1359,7 @@ move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
     if (
         curr_frame_resource->fence != 0 &&
         render_ctx->fence->GetCompletedValue() < curr_frame_resource->fence
-    ) {
+        ) {
         HANDLE event_handle = CreateEventEx(nullptr, nullptr, false, EVENT_ALL_ACCESS);
         if (0 != event_handle) {
             render_ctx->fence->SetEventOnCompletion(
@@ -1684,7 +1722,7 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
 
     // -- initialize fog data
     render_ctx->main_pass_constants.fog_color = {0.7f, 0.7f, 0.7f, 1.0f};
-    render_ctx->main_pass_constants.fog_start = 1000.0f;
+    render_ctx->main_pass_constants.fog_start = 5.0f;
     render_ctx->main_pass_constants.fog_range = 1000.0f;
 
     // -- initialize light data
@@ -1886,6 +1924,7 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
     }
 
     Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
+    BoundingFrustum::CreateFromMatrix(global_cam_frustum, Camera_GetProj(global_camera));
 }
 static void
 check_active_item () {
@@ -1995,7 +2034,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 800, 600);
+    SceneContext_Init(&global_scene_ctx, 1280, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -2004,6 +2043,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     global_camera = (Camera *)malloc(cam_size);
     Camera_Init(global_camera);
     Camera_SetPosition(global_camera, 10.0f, 5.0f, -45.0f);
+
+    BoundingFrustum::CreateFromMatrix(global_cam_frustum, Camera_GetProj(global_camera));
 
     // ========================================================================================================
 #pragma region Windows_Setup
@@ -2400,6 +2441,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     float fps = 0.0f;
     float mspf = 0.0f;
     TCHAR * stats_str = (TCHAR *)malloc(stats_str_count * sizeof(TCHAR));
+    int visible_objs = 0;
     memset(stats_str, '\0', stats_str_count);
     if (global_imgui_enabled) {
         IMGUI_CHECKVERSION();
@@ -2490,12 +2532,39 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 ImGui::Checkbox("Draw Stylized (Sobel Filter)", &stylized_sobel);
 
-                ImGui::Text("\nUse \'W\' \'S\' for Walk, \'A\' \'D\' for Strafing");
-
-                ImGui::Text("\n");
                 ImGui::Separator();
+                ImGui::Separator();
+                ImGui::Checkbox("Frustum Culling", &global_frustumculling_enabled);
+                ImGui::Separator();
+
+                /*ImGui::Text("\nUse \'W\' \'S\' for Walk, \'A\' \'D\' for Strafing");*/
+
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                ImDrawList* draw_list = ImGui::GetWindowDrawList();
+                ImVec2 pos = ImGui::GetCursorScreenPos();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + 400.0f);
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-                ImGui::Text("Game stats; fps = %.3f, mspf = %.3f ", fps, mspf);
+
+                // Draw actual text surrounding box
+                ImVec2 text_box_min = ImVec2(ImGui::GetItemRectMin().x * 0.99f - 3.0f, ImGui::GetItemRectMin().y * 0.99f);
+                ImVec2 text_box_max = ImVec2(ImGui::GetItemRectMax().x * 1.01f, ImGui::GetItemRectMax().y * 1.01f + 2.0f);
+                draw_list->AddRect(text_box_min, text_box_max, IM_COL32(255, 0, 0, 255));
+                ImGui::PopTextWrapPos();
+
+
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Visible Objects = %d, ", visible_objs);
+                ImGui::SameLine(); ImGui::Text("Total Objects = %d", max_instance_count);
+
+                // NOTE(omid): Double checking stats 
+                ImGui::Separator();
+                ImGui::Spacing();
+                calculate_frame_stats(&global_timer, &fps, &mspf);
+                ImGui::TextColored(
+                    ImVec4(0.2f, 0.4f, 0.6f, 0.9f),
+                    "Game stats (Validation); fps = %.2f, mspf = %.2f ", fps, mspf
+                );
 
                 ImGui::End();
                 ImGui::Render();
@@ -2507,15 +2576,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             Timer_Tick(&global_timer);
 
             if (!global_paused) {
-                calculate_frame_stats(&global_timer, &fps, &mspf);
-
                 move_to_next_frame(render_ctx, &render_ctx->frame_index);
 
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
                 animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
-                update_instance_buffer(render_ctx);
                 update_mat_buffer(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
+                visible_objs = update_instance_buffer(render_ctx);
 
                 if (!stylized_sobel) {
                     CHECK_AND_FAIL(draw_main(render_ctx, global_blur_filter, blur_count));
