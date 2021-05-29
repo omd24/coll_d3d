@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dyn_indexing_and_firstperso
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "instancing_and_frustum_culling", "instancing_and_frustum_culling\instancing_and_frustum_culling.vcxproj", "{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ray_picking", "ray_picking\ray_picking.vcxproj", "{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x64.Build.0 = Release|x64
 		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x86.ActiveCfg = Release|Win32
 		{1C7DAE71-37C0-4B31-A7D1-B915B9E67CA2}.Release|x86.Build.0 = Release|Win32
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Debug|x64.ActiveCfg = Debug|x64
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Debug|x64.Build.0 = Debug|x64
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Debug|x86.ActiveCfg = Debug|Win32
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Debug|x86.Build.0 = Debug|Win32
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Release|x64.ActiveCfg = Release|x64
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Release|x64.Build.0 = Release|x64
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Release|x86.ActiveCfg = Release|Win32
+		{539CE3AE-AFF3-4ECA-B4E9-6D7467753F43}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
