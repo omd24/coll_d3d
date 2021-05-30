@@ -27,7 +27,7 @@ struct Light {
 
 #define MAX_LIGHTS  16
 
-struct InstanceData {
+struct ObjectConstants {
     XMFLOAT4X4 world;
     XMFLOAT4X4 tex_transform;
 
@@ -35,7 +35,11 @@ struct InstanceData {
     UINT instance_pad0;
     UINT instance_pad1;
     UINT instance_pad2;
+
+    float padding [28];
 };
+static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
+
 // -- per pass constants
 struct PassConstants {
     XMFLOAT4X4 view;
@@ -139,8 +143,8 @@ struct FrameResource {
     ID3D12Resource * material_sbuffer;
     uint8_t * material_ptr;
 
-    ID3D12Resource * instance_sbuffer;
-    uint8_t * instance_ptr;
+    ID3D12Resource * obj_cb;
+    uint8_t * obj_ptr;
 
     // Fence value to mark commands up to this fence point.  This lets us
     // check if these frame resources are still in use by the GPU.
@@ -148,6 +152,8 @@ struct FrameResource {
 };
 struct RenderItem {
     bool initialized;
+
+    bool visible;
 
     // World matrix of the shape that describes the object's local space
     // relative to the world space, which defines the position, orientation,

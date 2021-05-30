@@ -10,16 +10,6 @@
 
 #include "light_utils.hlsl"
 
-struct InstanceData {
-    float4x4 world;
-    float4x4 tex_transform;
-
-    uint mat_index;
-    uint instance_pad0;
-    uint instance_pad1;
-    uint instance_pad2;
-};
-
 struct MaterialData {
     float4 diffuse_albedo;
     float3 fresnel_r0;
@@ -34,13 +24,12 @@ struct MaterialData {
 
 // array of textures
 // unlike Texture2DArray, the textures can be different sizes and formats
-// 4 is the number of textures
-// NOTE(omid): The 4 elements of texture array occupy registers t0, t1, t2, t3
-Texture2D global_diffuse_maps[4] : register(t0);
+// 1 is the number of textures
+// NOTE(omid): The 1 element(s) of texture array occupy registers t0
+Texture2D global_diffuse_maps[1] : register(t0);
 
 // use space1 to avoid overlap wth texture array (in space0)
-StructuredBuffer<InstanceData> global_instance_data : register(t0, space1);
-StructuredBuffer<MaterialData> global_mat_data : register(t1, space1);
+StructuredBuffer<MaterialData> global_mat_data : register(t0, space1);
 
 SamplerState global_sam_point_wrap : register(s0);
 SamplerState global_sam_point_clamp : register(s1);
@@ -49,8 +38,16 @@ SamplerState global_sam_linear_clamp : register(s3);
 SamplerState global_sam_anisotropic_wrap : register(s4);
 SamplerState global_sam_anisotropic_clamp : register(s5);
 
+cbuffer PerObjBuffer : register(b0) {
+    float4x4 g_world;
+    float4x4 g_tex_transform;
+    uint g_mat_index;
+    uint obj_pad0;
+    uint obj_pad1;
+    uint obj_pad2;
+}
 
-cbuffer PerPassConstantBuffer : register(b0){
+cbuffer PerPassConstantBuffer : register(b1){
     float4x4 global_view;
     float4x4 global_inv_view;
     float4x4 global_proj;
@@ -91,45 +88,34 @@ struct VertexShaderOutput {
     float3 pos_world : Position;
     float3 normal_world : NORMAL;
     float2 texc : TEXCOORD;
-
-    // index shall not get interpolated across triangle
-    nointerpolation uint mat_index : MATINDEX;
 };
 VertexShaderOutput
 VertexShader_Main (VertexShaderInput vin, uint instance_id : SV_InstanceID) {
-    VertexShaderOutput result = (VertexShaderOutput)0.0f;
-
-    // fetch instance data
-    InstanceData inst_data = global_instance_data[instance_id];
-    float4x4 world = inst_data.world;
-    float4x4 tex_transform = inst_data.tex_transform;
-    uint mat_index = inst_data.mat_index;
-    
-    result.mat_index = mat_index;
+    VertexShaderOutput ret = (VertexShaderOutput)0.0f;
  
     // fetch material data
-    MaterialData mat_data = global_mat_data[mat_index];
+    MaterialData mat_data = global_mat_data[g_mat_index];
     
     // transform to world space
-    float4 pos_world = mul(float4(vin.pos_local, 1.0f), world);
-    result.pos_world = pos_world.xyz;
+    float4 pos_world = mul(float4(vin.pos_local, 1.0f), g_world);
+    ret.pos_world = pos_world.xyz;
     
     // assuming nonuniform scale (otherwise have to use inverse-transpose of world-matrix)
-    result.normal_world = mul(vin.normal_local, (float3x3)world);
+    ret.normal_world = mul(vin.normal_local, (float3x3)g_world);
 
     // transform to homogenous clip space
-    result.pos_homogenous_clip_space = mul(pos_world, global_view_proj);
+    ret.pos_homogenous_clip_space = mul(pos_world, global_view_proj);
 
     // output vertex attributes for interpolation across triangle
-    float4 texc = mul(float4(vin.texc, 0.0f, 1.0f), tex_transform);
-    result.texc = mul(texc, mat_data.mat_transform).xy;
+    float4 texc = mul(float4(vin.texc, 0.0f, 1.0f), g_tex_transform);
+    ret.texc = mul(texc, mat_data.mat_transform).xy;
 
-    return result;
+    return ret;
 }
 float4
 PixelShader_Main (VertexShaderOutput pin) : SV_Target{
     // fetch material data
-    MaterialData mat_data = global_mat_data[pin.mat_index];
+    MaterialData mat_data = global_mat_data[g_mat_index];
     
     // extract data
     float4 diffuse_albedo = mat_data.diffuse_albedo;
@@ -139,7 +125,7 @@ PixelShader_Main (VertexShaderOutput pin) : SV_Target{
     
     // dynamically look up the texture in the array
     diffuse_albedo *=
-        global_diffuse_maps[diffuse_tex_index].Sample(global_sam_anisotropic_wrap, pin.texc);
+        global_diffuse_maps[diffuse_tex_index].Sample(global_sam_linear_wrap, pin.texc);
 
 #ifdef ALPHA_TEST
     clip(diffuse_albedo.a - 0.1f);

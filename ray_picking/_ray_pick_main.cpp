@@ -46,15 +46,13 @@
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
-    LAYER_TRANSPARENT = 1,
-    LAYER_ALPHATESTED = 2,
+    LAYER_HIGHLIGHT = 1,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
-static int max_instance_count = 0;
-InstanceData * global_instance_data = nullptr;    // array of instance data
 enum ALL_RENDERITEMS {
-    RITEM_SKULL = 0,
+    RITEM_CAR = 0,
+    RITEM_PICKED = 1,
 
     _COUNT_RENDERITEM
 };
@@ -66,23 +64,18 @@ enum SHADERS_CODE {
     _COUNT_SHADERS
 };
 enum GEOM_INDEX {
-    GEOM_SKULL = 0,
+    GEOM_CAR = 0,
 
     _COUNT_GEOM
 };
 enum MAT_INDEX {
-    MAT_WOOD_CRATE = 0,
-    MAT_GRASS = 1,
-    MAT_WATER = 2,
-    MAT_WIRED_CRATE = 3,
+    MAT_GRAY = 0,
+    MAT_HIGHLIGHT = 1,
 
     _COUNT_MATERIAL
 };
 enum TEX_INDEX {
-    TEX_CRATE01 = 0,
-    TEX_WATER = 1,
-    TEX_GRASS = 2,
-    TEX_WIREFENCE = 3,
+    TEX_WHITE1x1 = 0,
 
     _COUNT_TEX
 };
@@ -116,7 +109,7 @@ BoundingFrustum global_cam_frustum;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
-bool global_mouse_active;
+RenderItem * global_picked_ritem;
 SceneContext global_scene_ctx;
 
 #if defined(ENABLE_FRUSTUM_CULLING)
@@ -147,8 +140,6 @@ struct D3DRenderContext {
     IDXGISwapChain *                swapchain;
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
-    ID3D12RootSignature *           root_signature_postprocessing_blur;
-    ID3D12RootSignature *           root_signature_postprocessing_sobel;
     ID3D12PipelineState *           psos[_COUNT_RENDERCOMPUTE_LAYER];
 
     // Command objects
@@ -169,9 +160,8 @@ struct D3DRenderContext {
     // List of all the render items.
     RenderItemArray                 all_ritems;
     // Render items divided by PSO.
-    /*RenderItemArray                 opaque_ritems;
-    RenderItemArray                 transparent_ritems;
-    RenderItemArray                 alphatested_ritems;*/
+    RenderItemArray                 opaque_ritems;
+    RenderItemArray                 highlight_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -257,48 +247,30 @@ load_texture (
 }
 static void
 create_materials (Material out_materials []) {
-    strcpy_s(out_materials[MAT_GRASS].name, "grass");
-    out_materials[MAT_GRASS].mat_cbuffer_index = 0;
-    out_materials[MAT_GRASS].diffuse_srvheap_index = 0;
-    out_materials[MAT_GRASS].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_GRASS].fresnel_r0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
-    out_materials[MAT_GRASS].roughness = 0.125f;
-    out_materials[MAT_GRASS].mat_transform = Identity4x4();
-    out_materials[MAT_GRASS].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_GRAY].name, "gray");
+    out_materials[MAT_GRAY].mat_cbuffer_index = 0;
+    out_materials[MAT_GRAY].diffuse_srvheap_index = 0;
+    out_materials[MAT_GRAY].diffuse_albedo = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
+    out_materials[MAT_GRAY].fresnel_r0 = XMFLOAT3(0.04f, 0.04f, 0.04f);
+    out_materials[MAT_GRAY].roughness = 0.0f;
+    out_materials[MAT_GRAY].mat_transform = Identity4x4();
+    out_materials[MAT_GRAY].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    strcpy_s(out_materials[MAT_WATER].name, "water");
-    out_materials[MAT_WATER].mat_cbuffer_index = 1;
-    out_materials[MAT_WATER].diffuse_srvheap_index = 1;
-    out_materials[MAT_WATER].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 0.5f);
-    out_materials[MAT_WATER].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
-    out_materials[MAT_WATER].roughness = 0.0f;
-    out_materials[MAT_WATER].mat_transform = Identity4x4();
-    out_materials[MAT_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
-
-    strcpy_s(out_materials[MAT_WOOD_CRATE].name, "wood_crate");
-    out_materials[MAT_WOOD_CRATE].mat_cbuffer_index = 2;
-    out_materials[MAT_WOOD_CRATE].diffuse_srvheap_index = 2;
-    out_materials[MAT_WOOD_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WOOD_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WOOD_CRATE].roughness = 0.2f;
-    out_materials[MAT_WOOD_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WOOD_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
-
-    strcpy_s(out_materials[MAT_WIRED_CRATE].name, "wired_crate");
-    out_materials[MAT_WIRED_CRATE].mat_cbuffer_index = 3;
-    out_materials[MAT_WIRED_CRATE].diffuse_srvheap_index = 3;
-    out_materials[MAT_WIRED_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WIRED_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WIRED_CRATE].roughness = 0.2f;
-    out_materials[MAT_WIRED_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WIRED_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_HIGHLIGHT].name, "highlight");
+    out_materials[MAT_HIGHLIGHT].mat_cbuffer_index = 1;
+    out_materials[MAT_HIGHLIGHT].diffuse_srvheap_index = 0;
+    out_materials[MAT_HIGHLIGHT].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.6f);
+    out_materials[MAT_HIGHLIGHT].fresnel_r0 = XMFLOAT3(0.06f, 0.06f, 0.06f);
+    out_materials[MAT_HIGHLIGHT].roughness = 0.0f;
+    out_materials[MAT_HIGHLIGHT].mat_transform = Identity4x4();
+    out_materials[MAT_HIGHLIGHT].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
-create_skull_geometry (D3DRenderContext * render_ctx) {
+create_car_geometry (D3DRenderContext * render_ctx) {
 
 #pragma region Read_Data_File
     FILE * f = nullptr;
-    errno_t err = fopen_s(&f, "./models/skull.txt", "r");
+    errno_t err = fopen_s(&f, "./models/car.txt", "r");
     if (0 == f || err != 0) {
         printf("could not open file\n");
         return;
@@ -410,20 +382,20 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     UINT vb_byte_size = vcount * sizeof(Vertex);
     UINT ib_byte_size = (tcount * 3) * sizeof(uint32_t);
 
-    // -- Fill out render_ctx geom[GEOM_SKULL] (skull)
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_SKULL].vb_cpu);
-    CopyMemory(render_ctx->geom[GEOM_SKULL].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+    // -- Fill out render_ctx geom[GEOM_CAR] (skull)
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_CAR].vb_cpu);
+    CopyMemory(render_ctx->geom[GEOM_CAR].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_SKULL].ib_cpu);
-    CopyMemory(render_ctx->geom[GEOM_SKULL].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_CAR].ib_cpu);
+    CopyMemory(render_ctx->geom[GEOM_CAR].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_SKULL].vb_uploader, &render_ctx->geom[GEOM_SKULL].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_SKULL].ib_uploader, &render_ctx->geom[GEOM_SKULL].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_CAR].vb_uploader, &render_ctx->geom[GEOM_CAR].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_CAR].ib_uploader, &render_ctx->geom[GEOM_CAR].ib_gpu);
 
-    render_ctx->geom[GEOM_SKULL].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_SKULL].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_SKULL].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_SKULL].index_format = DXGI_FORMAT_R32_UINT;
+    render_ctx->geom[GEOM_CAR].vb_byte_stide = sizeof(Vertex);
+    render_ctx->geom[GEOM_CAR].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_CAR].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_CAR].index_format = DXGI_FORMAT_R32_UINT;
 
     SubmeshGeometry submesh = {};
     submesh.index_count = tcount * 3;
@@ -431,8 +403,8 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     submesh.base_vertex_location = 0;
     submesh.bounds = bounds;
 
-    render_ctx->geom[GEOM_SKULL].submesh_names[0] = "skull";
-    render_ctx->geom[GEOM_SKULL].submesh_geoms[0] = submesh;
+    render_ctx->geom[GEOM_CAR].submesh_names[0] = "car";
+    render_ctx->geom[GEOM_CAR].submesh_geoms[0] = submesh;
 
     // -- cleanup
     free(vertices);
@@ -441,84 +413,72 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
 static void
 create_render_items (D3DRenderContext * render_ctx) {
 
-    render_ctx->all_ritems.ritems[RITEM_SKULL].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
-    //XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 0;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_GRASS];
-    render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
-    render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].index_count = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].start_index_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].bounds = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].bounds;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
-    //render_ctx->all_ritems.ritems[RITEM_SKULL].bounds = ...
+    render_ctx->all_ritems.ritems[RITEM_CAR].world = Identity4x4();
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_CAR].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_CAR].obj_cbuffer_index = 0;
+    render_ctx->all_ritems.ritems[RITEM_CAR].mat = &render_ctx->materials[MAT_GRAY];
+    render_ctx->all_ritems.ritems[RITEM_CAR].geometry = &render_ctx->geom[GEOM_CAR];
+    render_ctx->all_ritems.ritems[RITEM_CAR].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_CAR].index_count = render_ctx->geom[GEOM_CAR].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_CAR].start_index_loc = render_ctx->geom[GEOM_CAR].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_CAR].base_vertex_loc = render_ctx->geom[GEOM_CAR].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_CAR].bounds = render_ctx->geom[GEOM_CAR].submesh_geoms[0].bounds;
+    render_ctx->all_ritems.ritems[RITEM_CAR].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_CAR].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_CAR].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_CAR].visible = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_CAR];
+    render_ctx->opaque_ritems.size++;
 
-    // -- generate instance data
-    int const n = 10;
-    max_instance_count = n * n * n;
-    global_instance_data = (InstanceData *)::calloc(max_instance_count, sizeof(InstanceData));
+    render_ctx->all_ritems.ritems[RITEM_PICKED].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_PICKED].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_PICKED].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_PICKED].mat = &render_ctx->materials[MAT_HIGHLIGHT];
+    render_ctx->all_ritems.ritems[RITEM_PICKED].geometry = &render_ctx->geom[GEOM_CAR];
+    render_ctx->all_ritems.ritems[RITEM_PICKED].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
-    float width = 200.0f;
-    float height = 200.0f;
-    float depth = 200.0f;
+    // draw parameters are calculated when picking
+    render_ctx->all_ritems.ritems[RITEM_PICKED].index_count = 0;
+    render_ctx->all_ritems.ritems[RITEM_PICKED].start_index_loc = 0;
+    render_ctx->all_ritems.ritems[RITEM_PICKED].base_vertex_loc = 0;
 
-    float x = -0.5f * width;
-    float y = -0.5f * height;
-    float z = -0.5f * depth;
-    float dx = width / (n - 1);
-    float dy = height / (n - 1);
-    float dz = depth / (n - 1);
-    for (int k = 0; k < n; ++k) {
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                int index = k * n * n + i * n + j;
-                // Position instanced along a 3D grid.
-                global_instance_data[index].world = XMFLOAT4X4(
-                    1.0f, 0.0f, 0.0f, 0.0f,
-                    0.0f, 1.0f, 0.0f, 0.0f,
-                    0.0f, 0.0f, 1.0f, 0.0f,
-                    x + j * dx, y + i * dy, z + k * dz, 1.0f);
+    render_ctx->all_ritems.ritems[RITEM_PICKED].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_PICKED].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_PICKED].initialized = true;
 
-                XMStoreFloat4x4(&global_instance_data[index].tex_transform, XMMatrixScaling(2.0f, 2.0f, 1.0f));
-                global_instance_data[index].mat_index = index % _COUNT_MATERIAL;
-            }
-        }
-    }
+    // picked triangle is not visible until one is picked.
+    render_ctx->all_ritems.ritems[RITEM_PICKED].visible = false;
 
     render_ctx->all_ritems.size++;
-    /*render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKULL];
-    render_ctx->opaque_ritems.size++;*/
+    global_picked_ritem = &render_ctx->all_ritems.ritems[RITEM_PICKED];
+    render_ctx->highlight_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_PICKED];
+    render_ctx->highlight_ritems.size++;
 }
 static void
 draw_render_items (
     ID3D12GraphicsCommandList * cmd_list,
-    ID3D12Resource * instance_buffer,
+    ID3D12Resource * obj_cb,
     UINT64 descriptor_increment_size,
-    RenderItemArray * ritem_array,
-    UINT current_frame_index
+    RenderItemArray * ritem_array
 ) {
-    UINT frame_index = current_frame_index;
+    size_t obj_cbuffer_size = sizeof(ObjectConstants);
     for (size_t i = 0; i < ritem_array->size; ++i) {
-        if (ritem_array->ritems[i].initialized) {
+        if (ritem_array->ritems[i].initialized && ritem_array->ritems[i].visible) {
             D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(ritem_array->ritems[i].geometry);
             D3D12_INDEX_BUFFER_VIEW ibv = Mesh_GetIndexBufferView(ritem_array->ritems[i].geometry);
             cmd_list->IASetVertexBuffers(0, 1, &vbv);
             cmd_list->IASetIndexBuffer(&ibv);
             cmd_list->IASetPrimitiveTopology(ritem_array->ritems[i].primitive_type);
 
-            // Set the instance buffer to use for this render-item.
-            // For structured buffers, we can bypass the heap and set as a root descriptor.
-            //ID3D12Resource * instance_buffer = instance_buffer; // TODO(omid): correct instance book keeping 
+            D3D12_GPU_VIRTUAL_ADDRESS obj_cb_address =
+                obj_cb->GetGPUVirtualAddress() + ritem_array->ritems[i].obj_cbuffer_index * obj_cbuffer_size;
 
-            cmd_list->SetGraphicsRootShaderResourceView(0, instance_buffer->GetGPUVirtualAddress());
+            cmd_list->SetGraphicsRootConstantBufferView(0, obj_cb_address);
 
             cmd_list->DrawIndexedInstanced(
                 ritem_array->ritems[i].index_count,
-                ritem_array->ritems[i].instance_count,
+                1,
                 ritem_array->ritems[i].start_index_loc, ritem_array->ritems[i].base_vertex_loc, 0);
         }
     }
@@ -527,8 +487,7 @@ static void
 create_descriptor_heaps (D3DRenderContext * render_ctx) {
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX +
-        1;      /* imgui descriptor     */
+    srv_heap_desc.NumDescriptors = _COUNT_TEX;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -536,52 +495,16 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     // Fill out the heap with actual descriptors
     D3D12_CPU_DESCRIPTOR_HANDLE descriptor_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
 
-    // grass texture
-    ID3D12Resource * grass_tex = render_ctx->textures[TEX_GRASS].resource;
+    // default texture
+    ID3D12Resource * default_tex = render_ctx->textures[TEX_WHITE1x1].resource;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = grass_tex->GetDesc().Format;
+    srv_desc.Format = default_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = grass_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = default_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    render_ctx->device->CreateShaderResourceView(grass_tex, &srv_desc, descriptor_cpu_handle);
-
-    // water texture
-    ID3D12Resource * water_tex = render_ctx->textures[TEX_WATER].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc));         // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = water_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = water_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptr
-    render_ctx->device->CreateShaderResourceView(water_tex, &srv_desc, descriptor_cpu_handle);
-
-    // crate texture
-    ID3D12Resource * box_tex = render_ctx->textures[TEX_CRATE01].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = box_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = box_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(box_tex, &srv_desc, descriptor_cpu_handle);
-
-    // wire_fence texture
-    ID3D12Resource * wire_tex = render_ctx->textures[TEX_WIREFENCE].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = wire_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = wire_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(wire_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(default_tex, &srv_desc, descriptor_cpu_handle);
 
     //
     // Create Render Target View Descriptor Heap
@@ -712,21 +635,21 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     D3D12_ROOT_PARAMETER slot_root_params[4] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     // -- structured buffer <material data>
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     slot_root_params[0].Descriptor.ShaderRegister = 0;
-    slot_root_params[0].Descriptor.RegisterSpace = 1;
+    slot_root_params[0].Descriptor.RegisterSpace = 0;
     slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // -- structured buffer <instance data>
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     slot_root_params[1].Descriptor.ShaderRegister = 1;
-    slot_root_params[1].Descriptor.RegisterSpace = 1;
+    slot_root_params[1].Descriptor.RegisterSpace = 0;
     slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // -- pass cbuffer
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     slot_root_params[2].Descriptor.ShaderRegister = 0;
-    slot_root_params[2].Descriptor.RegisterSpace = 0;
+    slot_root_params[2].Descriptor.RegisterSpace = 1;
     slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // -- textures
@@ -755,127 +678,6 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     }
 
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
-}
-static void
-create_root_signature_postprocessing_blur (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
-
-    D3D12_DESCRIPTOR_RANGE srv_table = {};
-    srv_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table.NumDescriptors = 1;
-    srv_table.BaseShaderRegister = 0;
-    srv_table.RegisterSpace = 0;
-    srv_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table = {};
-    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table.NumDescriptors = 1;
-    uav_table.BaseShaderRegister = 0;
-    uav_table.RegisterSpace = 0;
-    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
-    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    slot_root_params[0].Constants.Num32BitValues = 12; /* blur_radius, weights [11] */
-    slot_root_params[0].Constants.ShaderRegister = 0;
-    slot_root_params[0].Constants.RegisterSpace = 0;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table;
-    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
-    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // A root signature is an array of root parameters.
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = _countof(slot_root_params);
-    root_sig_desc.pParameters = slot_root_params;
-    root_sig_desc.NumStaticSamplers = 0;
-    root_sig_desc.pStaticSamplers = NULL;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ID3DBlob * serialized_root_sig = nullptr;
-    ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
-
-    if (error_blob) {
-        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
-    }
-
-    device->CreateRootSignature(
-        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
-        IID_PPV_ARGS(postprocessing_root_signature)
-    );
-}
-static void
-create_root_signature_postprocessing_sobel (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
-
-    D3D12_DESCRIPTOR_RANGE srv_table0 = {};
-    srv_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table0.NumDescriptors = 1;
-    srv_table0.BaseShaderRegister = 0;
-    srv_table0.RegisterSpace = 0;
-    srv_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE srv_table1 = {};
-    srv_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table1.NumDescriptors = 1;
-    srv_table1.BaseShaderRegister = 1;
-    srv_table1.RegisterSpace = 0;
-    srv_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table = {};
-    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table.NumDescriptors = 1;
-    uav_table.BaseShaderRegister = 0;
-    uav_table.RegisterSpace = 0;
-    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
-    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[0].DescriptorTable.pDescriptorRanges = &srv_table0;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table1;
-    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
-    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
-    get_static_samplers(samplers);
-
-    // A root signature is an array of root parameters.
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = _countof(slot_root_params);
-    root_sig_desc.pParameters = slot_root_params;
-    root_sig_desc.NumStaticSamplers = _COUNT_SAMPLER;
-    root_sig_desc.pStaticSamplers = samplers;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-    ID3DBlob * serialized_root_sig = nullptr;
-    ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
-
-    if (error_blob) {
-        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
-    }
-
-    device->CreateRootSignature(
-        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
-        IID_PPV_ARGS(postprocessing_root_signature)
-    );
 }
 static HRESULT
 compile_shader (wchar_t * path, wchar_t const * entry_point, wchar_t const * shader_model, DxcDefine defines [], int n_defines, IDxcBlob ** out_shader_ptr) {
@@ -1032,9 +834,15 @@ create_pso (D3DRenderContext * render_ctx) {
 
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
     //
-    // -- Create PSO for Transparent objs
+    // -- Create PSO for Highlight obj(s)
     //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent_pso_desc = opaque_pso_desc;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC highlight_pso_desc = opaque_pso_desc;
+
+    // Change the depth test from < to <= so that if we draw the same triangle twice, it will
+    // still pass the depth test.  This is needed because we redraw the picked triangle with a
+    // different material to highlight it.  If we do not use <=, the triangle will fail the 
+    // depth test the 2nd time we try and draw it.
+    highlight_pso_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
     D3D12_RENDER_TARGET_BLEND_DESC transparency_blend_desc = {};
     transparency_blend_desc.BlendEnable = true;
@@ -1048,100 +856,173 @@ create_pso (D3DRenderContext * render_ctx) {
     transparency_blend_desc.LogicOp = D3D12_LOGIC_OP_NOOP;
     transparency_blend_desc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    transparent_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
-    render_ctx->device->CreateGraphicsPipelineState(&transparent_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_TRANSPARENT]));
-    //
-    // -- Create PSO for AlphaTested objs
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC alpha_pso_desc = opaque_pso_desc;
-    alpha_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferPointer();
-    alpha_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferSize();
-    alpha_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED]));
+    highlight_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
+    render_ctx->device->CreateGraphicsPipelineState(&highlight_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_HIGHLIGHT]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
     float dt = gt->delta_time;
 
     if (GetAsyncKeyState('W') & 0x8000)
-        Camera_Walk(global_camera, 20.0f * dt);
+        Camera_Walk(global_camera, 10.0f * dt);
 
     if (GetAsyncKeyState('S') & 0x8000)
-        Camera_Walk(global_camera, -20.0f * dt);
+        Camera_Walk(global_camera, -10.0f * dt);
 
     if (GetAsyncKeyState('A') & 0x8000)
-        Camera_Strafe(global_camera, -20.0f * dt);
+        Camera_Strafe(global_camera, -10.0f * dt);
 
     if (GetAsyncKeyState('D') & 0x8000)
-        Camera_Strafe(global_camera, 20.0f * dt);
+        Camera_Strafe(global_camera, 10.0f * dt);
 
     Camera_UpdateViewMatrix(global_camera);
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
-    if (global_mouse_active) {
-        if ((wParam & MK_LBUTTON) != 0) {
-            // make each pixel correspond to a quarter of a degree
-            float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
-            float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
+    if ((wParam & MK_LBUTTON) != 0) {
+        // make each pixel correspond to a quarter of a degree
+        float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
+        float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-            Camera_Pitch(global_camera, dy);
-            Camera_RotateY(global_camera, dx);
-        }
+        Camera_Pitch(global_camera, dy);
+        Camera_RotateY(global_camera, dx);
     }
     scene_ctx->mouse.x = x;
     scene_ctx->mouse.y = y;
 }
-static int
-update_instance_buffer (D3DRenderContext * render_ctx) {
-    int visible_instance_count = 0;
-    _ASSERT_EXPR(global_instance_data, _T("global instance data array not initialized"));
+static void
+ray_pick (int sx, int sy, int ritems_count, RenderItem ritems []) {
+    XMFLOAT4X4 proj = Camera_GetProj4x4f(global_camera);
+
+    // -- compute (vx, vy, 1) on picking ray in view space
+    float vx = (+2.0f * sx / global_scene_ctx.width - 1.0f) / proj(0, 0);
+    float vy = (-2.0f * sy / global_scene_ctx.height + 1.0f) / proj(1, 1);
+
+    // -- define ray on viw space
+    XMVECTOR ray_origin = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    XMVECTOR ray_dir = XMVectorSet(vx, vy, 1.0f, 0.0f);
 
     XMMATRIX view = Camera_GetView(global_camera);
     XMVECTOR det_view = XMMatrixDeterminant(view);
     XMMATRIX inv_view = XMMatrixInverse(&det_view, view);
 
-    UINT frame_index = render_ctx->frame_index;
-    size_t instance_data_size = sizeof(InstanceData);
-    uint8_t * instance_begin_ptr = render_ctx->frame_resources[frame_index].instance_ptr;
-    for (unsigned i = 0; i < render_ctx->all_ritems.size; i++) {
-        if (render_ctx->all_ritems.ritems[i].initialized) {
-            for (int j = 0; j < max_instance_count; ++j) {
-                XMMATRIX world = XMLoadFloat4x4(&global_instance_data[j].world);
-                XMMATRIX tex_transform = XMLoadFloat4x4(&global_instance_data[j].tex_transform);
+    // -- assume no obj is picked to start
+    global_picked_ritem->visible = false;
 
-                XMVECTOR det_world = XMMatrixDeterminant(world);
-                XMMATRIX inv_world = XMMatrixInverse(&det_world, world);
+    // -- check if we picked an opague render item
+    // NOTE(omid): A real app might keep a separate "picking list" of objects that can be selected 
+    for (int i = 0; i < ritems_count; ++i) {
+        MeshGeometry * geo = ritems[i].geometry;
 
-                //
-                // Frustum Culling
-                //
+        // -- skip invisible targets
+        if (false == ritems[i].visible)
+            continue;
 
-                // view space to obj's local space
-                XMMATRIX view_to_local = XMMatrixMultiply(inv_view, inv_world);
+        XMMATRIX world = XMLoadFloat4x4(&ritems[i].world);
+        XMVECTOR det_world = XMMatrixDeterminant(world);
+        XMMATRIX inv_world = XMMatrixInverse(&det_world, world);
 
-                // transform camera frustum from view space to obj's local space
-                BoundingFrustum local_camfrustum;
-                global_cam_frustum.Transform(local_camfrustum, view_to_local);
+        // -- compute matrix for transforming to local space of mesh (concat inv_view + inv_world)
+        XMMATRIX to_local = XMMatrixMultiply(inv_view, inv_world);
 
-                // perform box/frustum intersection test in local space
-                if (
-                    local_camfrustum.Contains(render_ctx->all_ritems.ritems[i].bounds) != DirectX::DISJOINT ||
-                    false == global_frustumculling_enabled
-                ) {
-                    InstanceData data = {};
-                    XMStoreFloat4x4(&data.world, XMMatrixTranspose(world));
-                    XMStoreFloat4x4(&data.tex_transform, XMMatrixTranspose(tex_transform));
-                    data.mat_index = global_instance_data[j].mat_index;
+        // -- transform ray to local space
+        ray_origin = XMVector3TransformCoord(ray_origin, to_local);
+        ray_dir = XMVector3TransformNormal(ray_dir, to_local);
 
-                    uint8_t * instance_ptr = instance_begin_ptr + (instance_data_size * visible_instance_count++);
-                    memcpy(instance_ptr, &data, instance_data_size);
+        // -- normalize ray dir (for intersection tests)
+        ray_dir = XMVector3Normalize(ray_dir);
+
+        /*
+            If we hit the bounding box of the mesh, then we might have picked a mesh triangle,
+            so do the ray/triangle tests.
+            
+            If we did not hit the bounding box, then it is impossible that we hit 
+            the mesh, so do not waste effort doing ray/triangle tests.
+        */
+        float tmin = 0.0f;
+        if (ritems[i].bounds.Intersects(ray_origin, ray_dir, tmin)) {
+            // NOTE(omid): for this demo we no what to cast to 
+            // but for real apps might need some metadata for book-keeping formats
+            Vertex * vertices = (Vertex *)geo->vb_cpu->GetBufferPointer();
+            uint32_t * indices = (uint32_t *)geo->ib_cpu->GetBufferPointer();
+            UINT tri_count = ritems[i].index_count / 3;
+
+            // -- find nearest ray/triangle intersection
+            tmin = FLT_MAX;
+            for (UINT j = 0; j < tri_count; ++j) {
+                // indices for this triangle
+                UINT i0 = indices[j * 3 + 0];
+                UINT i1 = indices[j * 3 + 1];
+                UINT i2 = indices[j * 3 + 2];
+
+                // vertices for this triangle
+                XMVECTOR v0 = XMLoadFloat3(&vertices[i0].position);
+                XMVECTOR v1 = XMLoadFloat3(&vertices[i1].position);
+                XMVECTOR v2 = XMLoadFloat3(&vertices[i2].position);
+
+                // -- iterate over all triagnles to find intersection
+                float t = 0.0f;
+                if (DirectX::TriangleTests::Intersects(ray_origin, ray_dir, v0, v1, v2, t)) {
+                    if (t < tmin) {
+                        tmin = t;
+                        UINT picked_triangle = j;
+
+                        global_picked_ritem->visible = true;
+                        global_picked_ritem->index_count = 3;
+                        global_picked_ritem->base_vertex_loc = 0;
+
+                        global_picked_ritem->world = ritems[i].world;
+                        global_picked_ritem->n_frames_dirty = NUM_QUEUING_FRAMES;
+
+                        // -- offset to the picked triangle in mesh index buffer
+                        global_picked_ritem->start_index_loc = 3 * picked_triangle;
+                    }
                 }
             }
-            render_ctx->all_ritems.ritems[i].instance_count = visible_instance_count;
         }
     }
-    return visible_instance_count;
+
+
+}
+static void
+handle_mouse_down (
+    SceneContext * scene_ctx,
+    WPARAM wparam,
+    int x, int y,
+    HWND hwnd,
+    int ritems_count,
+    RenderItem ritems[]
+) {
+    if ((wparam & MK_LBUTTON) != 0) {
+        scene_ctx->mouse.x = x;
+        scene_ctx->mouse.y = y;
+        SetCapture(hwnd);
+    } else if ((wparam & MK_RBUTTON) != 0)
+        ray_pick(x, y, ritems_count, ritems);
+}
+
+static void
+update_object_cbuffer (D3DRenderContext * render_ctx) {
+    UINT frame_index = render_ctx->frame_index;
+    size_t obj_cbuffer_size = sizeof(ObjectConstants);
+    uint8_t * obj_begin_ptr = render_ctx->frame_resources[frame_index].obj_ptr;
+    for (unsigned i = 0; i < render_ctx->all_ritems.size; i++) {
+        if (
+            render_ctx->all_ritems.ritems[i].initialized &&
+            render_ctx->all_ritems.ritems[i].n_frames_dirty
+        ) {
+            XMMATRIX world = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].world);
+            XMMATRIX tex_transform = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].tex_transform);
+            ObjectConstants data = {};
+
+            XMStoreFloat4x4(&data.world, XMMatrixTranspose(world));
+            XMStoreFloat4x4(&data.tex_transform, XMMatrixTranspose(tex_transform));
+            data.mat_index = render_ctx->all_ritems.ritems[i].mat->mat_cbuffer_index;
+
+            uint8_t * obj_ptr = obj_begin_ptr + (obj_cbuffer_size * render_ctx->all_ritems.ritems[i].obj_cbuffer_index);
+            memcpy(obj_ptr, &data, obj_cbuffer_size);
+        }
+    }
 }
 static void
 update_mat_buffer (D3DRenderContext * render_ctx) {
@@ -1208,27 +1089,6 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
 }
 static void
-animate_material (Material * mat, GameTimer * timer) {
-    // Scroll the water material texture coordinates.
-    //float& tu = mat->mat_transform(3, 0);
-    //float& tv = mat->mat_transform(3, 1);
-
-    //tu += 0.1f * timer->delta_time;
-    //tv += 0.02f * timer->delta_time;
-
-    //if (tu >= 1.0f)
-    //    tu -= 1.0f;
-
-    //if (tv >= 1.0f)
-    //    tv -= 1.0f;
-
-    //mat->mat_transform(3, 0) = tu;
-    //mat->mat_transform(3, 1) = tv;
-
-    //// Material has changed, so need to update cbuffer.
-    //mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-}
-static void
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
 
     // Cycle through the circular frame resource array.
@@ -1275,18 +1135,6 @@ flush_command_queue (D3DRenderContext * render_ctx) {
             CloseHandle(event_handle);
         }
     }
-}
-static void
-draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist, RenderItem * dummy_ritem) {
-    // using dummy buffer to suppress EXECUTION WARNING #202: COMMAND_LIST_DRAW_VERTEX_BUFFER_NOT_SET
-    D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(dummy_ritem->geometry);
-
-    // -- null out IA stage since we build the vertex off the SV_VertexID in the shader
-    cmdlist->IASetVertexBuffers(0, 1, &vbv);
-    cmdlist->IASetIndexBuffer(nullptr);
-    cmdlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-    cmdlist->DrawInstanced(6, 1, 0, 0);
 }
 static HRESULT
 draw_main (D3DRenderContext * render_ctx) {
@@ -1336,11 +1184,11 @@ draw_main (D3DRenderContext * render_ctx) {
 
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
-    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
+    cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb->GetGPUVirtualAddress());
 
     // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
     ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
-    cmdlist->SetGraphicsRootShaderResourceView(1, mat_buf->GetGPUVirtualAddress());
+    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
 
     // Bind all textures. We only specify the first descriptor in the table
     // Root sig knows how many descriptors we have in the table
@@ -1349,18 +1197,20 @@ draw_main (D3DRenderContext * render_ctx) {
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
         cmdlist,
-        render_ctx->frame_resources[frame_index].instance_sbuffer,
+        render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        &render_ctx->all_ritems, frame_index
+        &render_ctx->opaque_ritems
     );
-    // 2. draw alpha-tested objs
-    /*cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
+
+    // 2. draw highlighted obj(s)
+    render_ctx->highlight_ritems.ritems[0] = *global_picked_ritem;
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_HIGHLIGHT]);
     draw_render_items(
         cmdlist,
-        render_ctx->frame_resources[frame_index].instance_sbuffer,
+        render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        &render_ctx->alphatested_ritems, frame_index
-    );*/
+        &render_ctx->highlight_ritems
+    );
 
 
     // -- indicate that the backbuffer will now be used to present
@@ -1637,9 +1487,15 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN: {
-        global_scene_ctx.mouse.x = GET_X_LPARAM(lParam);
-        global_scene_ctx.mouse.y = GET_Y_LPARAM(lParam);
-        SetCapture(hwnd);
+        _ASSERT_EXPR(_render_ctx, _T("Uninitialized render context!"));
+        handle_mouse_down(
+            &global_scene_ctx,
+            wParam,
+            GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+            hwnd,
+            _render_ctx->opaque_ritems.size,
+            _render_ctx->opaque_ritems.ritems
+        );
     } break;
     case WM_LBUTTONUP:
     case WM_MBUTTONUP:
@@ -1710,6 +1566,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     global_camera = (Camera *)malloc(cam_size);
     Camera_Init(global_camera);
     Camera_SetPosition(global_camera, 10.0f, 5.0f, -45.0f);
+    {
+        XMFLOAT3 cam_pos = XMFLOAT3(5.0f, 4.0f, -15.0f);
+        XMFLOAT3 cam_target = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        XMFLOAT3 cam_up = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        Camera_LookAt(
+            global_camera,
+            &cam_pos, &cam_target, &cam_up
+        );
+    }
 
     BoundingFrustum::CreateFromMatrix(global_cam_frustum, Camera_GetProj(global_camera));
 
@@ -1868,37 +1733,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 // ========================================================================================================
 #pragma region Load Textures
-    // crate
-    strcpy_s(render_ctx->textures[TEX_CRATE01].name, "woodcrate01");
-    wcscpy_s(render_ctx->textures[TEX_CRATE01].filename, L"../Textures/WoodCrate02.dds");
+    // default tex
+    strcpy_s(render_ctx->textures[TEX_WHITE1x1].name, "tex_default");
+    wcscpy_s(render_ctx->textures[TEX_WHITE1x1].filename, L"../Textures/white1x1.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_CRATE01].filename,
-        &render_ctx->textures[TEX_CRATE01]
-    );
-    // water
-    strcpy_s(render_ctx->textures[TEX_WATER].name, "watertex");
-    wcscpy_s(render_ctx->textures[TEX_WATER].filename, L"../Textures/water1.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WATER].filename,
-        &render_ctx->textures[TEX_WATER]
-    );
-    // grass
-    strcpy_s(render_ctx->textures[TEX_GRASS].name, "grasstex");
-    wcscpy_s(render_ctx->textures[TEX_GRASS].filename, L"../Textures/grass.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_GRASS].filename,
-        &render_ctx->textures[TEX_GRASS]
-    );
-    // wire_fence
-    strcpy_s(render_ctx->textures[TEX_WIREFENCE].name, "wirefencetex");
-    wcscpy_s(render_ctx->textures[TEX_WIREFENCE].filename, L"../Textures/WireFence.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WIREFENCE].filename,
-        &render_ctx->textures[TEX_WIREFENCE]
+        render_ctx->textures[TEX_WHITE1x1].filename,
+        &render_ctx->textures[TEX_WHITE1x1]
     );
 #pragma endregion
 
@@ -1971,25 +1812,21 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_skull_geometry(render_ctx);
+    create_car_geometry(render_ctx);
     create_materials(render_ctx->materials);
     create_render_items(render_ctx);
 
 #pragma endregion 
 
 #pragma region Create CBuffers, MaterialData and InstanceData Buffers
-    _ASSERT_EXPR(max_instance_count > 0, _T("invalid instance count"));
-    UINT instance_data_size = sizeof(InstanceData);
+    UINT obj_cb_size = sizeof(ObjectConstants);
     UINT mat_data_size = sizeof(MaterialData);
     UINT pass_cb_size = sizeof(PassConstants);
     for (UINT i = 0; i < NUM_QUEUING_FRAMES; ++i) {
         // -- create a cmd-allocator for each frame
         res = render_ctx->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&render_ctx->frame_resources[i].cmd_list_alloc));
 
-        // TODO(omid):
-        // -- create instance buffer for each render-item
-        //for (UINT j = 0; j < _COUNT_RENDERITEM; ++j)
-        create_upload_buffer(render_ctx->device, (UINT64)instance_data_size * max_instance_count, &render_ctx->frame_resources[i].instance_ptr, &render_ctx->frame_resources[i].instance_sbuffer);
+        create_upload_buffer(render_ctx->device, (UINT64)obj_cb_size * _COUNT_RENDERITEM, &render_ctx->frame_resources[i].obj_ptr, &render_ctx->frame_resources[i].obj_cb);
 
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].material_ptr, &render_ctx->frame_resources[i].material_sbuffer);
 
@@ -2000,8 +1837,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // ========================================================================================================
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
-    create_root_signature_postprocessing_blur(render_ctx->device, &render_ctx->root_signature_postprocessing_blur);
-    create_root_signature_postprocessing_sobel(render_ctx->device, &render_ctx->root_signature_postprocessing_sobel);
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
@@ -2066,7 +1901,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Main_Loop
     global_paused = false;
     global_resizing = false;
-    global_mouse_active = true;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
 
@@ -2082,10 +1916,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 move_to_next_frame(render_ctx, &render_ctx->frame_index);
 
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
-                animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
                 update_mat_buffer(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
-                update_instance_buffer(render_ctx);
+                update_object_cbuffer(render_ctx);
 
                 draw_main(render_ctx);
 
@@ -2103,10 +1936,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // release queuing frame resources
     for (size_t i = 0; i < NUM_QUEUING_FRAMES; i++) {
         flush_command_queue(render_ctx);    // TODO(omid): Address the cbuffers release issue 
-        render_ctx->frame_resources[i].instance_sbuffer->Unmap(0, nullptr);
+        render_ctx->frame_resources[i].obj_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].material_sbuffer->Unmap(0, nullptr);
         render_ctx->frame_resources[i].pass_cb->Unmap(0, nullptr);
-        render_ctx->frame_resources[i].instance_sbuffer->Release();
+        render_ctx->frame_resources[i].obj_cb->Release();
         render_ctx->frame_resources[i].material_sbuffer->Release();
         render_ctx->frame_resources[i].pass_cb->Release();
 
@@ -2128,11 +1961,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     for (unsigned i = 0; i < _COUNT_SHADERS; ++i)
         render_ctx->shaders[i]->Release();
 
-    render_ctx->root_signature_postprocessing_sobel->Release();
-    render_ctx->root_signature_postprocessing_blur->Release();
     render_ctx->root_signature->Release();
-
-    ::free(global_instance_data);
 
     // release swapchain backbuffers resources
     for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i)
