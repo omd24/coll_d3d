@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="DearImGui">
+      <UniqueIdentifier>{88646802-9568-4c2a-82cb-9c746eaad4a1}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="env_mapping_and_reflection_modeling.cpp">
@@ -20,6 +23,24 @@
     </ClCompile>
     <ClCompile Include="camera.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui.cpp">
+      <Filter>DearImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui_draw.cpp">
+      <Filter>DearImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui_impl_dx12.cpp">
+      <Filter>DearImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui_impl_win32.cpp">
+      <Filter>DearImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui_tables.cpp">
+      <Filter>DearImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externals\imgui\imgui_widgets.cpp">
+      <Filter>DearImGui</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

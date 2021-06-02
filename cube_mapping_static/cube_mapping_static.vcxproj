@@ -120,6 +120,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalIncludeDirectories>$(SolutionDir)/externals/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -139,6 +140,7 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <Optimization>Disabled</Optimization>
       <WholeProgramOptimization>false</WholeProgramOptimization>
+      <AdditionalIncludeDirectories>$(SolutionDir)/externals/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -149,6 +151,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\externals\imgui\imgui.cpp" />
+    <ClCompile Include="..\externals\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\externals\imgui\imgui_impl_dx12.cpp" />
+    <ClCompile Include="..\externals\imgui\imgui_impl_win32.cpp" />
+    <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="camera.cpp" />
     <ClCompile Include="env_mapping_and_reflection_modeling.cpp" />
   </ItemGroup>

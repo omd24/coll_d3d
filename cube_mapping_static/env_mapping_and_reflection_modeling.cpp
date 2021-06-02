@@ -25,9 +25,15 @@
 #include "headers/game_timer.h"
 #include "headers/dds_loader.h"
 
+#include <imgui/imgui.h>
+#include <imgui/imgui_impl_win32.h>
+#include <imgui/imgui_impl_dx12.h>
+
 #include <time.h>
 
 #include "camera.h"
+
+#define ENABLE_DEARIMGUI
 
 #if !defined(NDEBUG) && !defined(_DEBUG)
 #error "Define at least one."
@@ -43,6 +49,12 @@
 
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
+
+#if defined(ENABLE_DEARIMGUI)
+bool global_imgui_enabled = true;
+#else
+bool global_imgui_enabled = false;
+#endif // defined(ENABLE_DEARIMGUI)
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
@@ -114,7 +126,10 @@ enum TEX_INDEX {
     TEX_BRICK = 0,
     TEX_TILE = 1,
     TEX_WHITE1x1 = 2,
-    TEX_SKY_CUBEMAP = 3,
+    TEX_SKY_CUBEMAP0 = 3,
+    TEX_SKY_CUBEMAP1 = 4,
+    TEX_SKY_CUBEMAP2 = 5,
+    TEX_SKY_CUBEMAP3 = 6,
 
     _COUNT_TEX
 };
@@ -147,6 +162,7 @@ Camera * global_camera;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
+bool global_mouse_active;
 SceneContext global_scene_ctx;
 
 struct RenderItemArray {
@@ -814,7 +830,7 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX;
+    srv_heap_desc.NumDescriptors = _COUNT_TEX + 1 /* DearImGui*/;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -848,7 +864,7 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     render_ctx->device->CreateShaderResourceView(default_tex, &srv_desc, descriptor_cpu_handle);
 
     // sky texture
-    ID3D12Resource * sky_tex = render_ctx->textures[TEX_SKY_CUBEMAP].resource;
+    ID3D12Resource * sky_tex = render_ctx->textures[TEX_SKY_CUBEMAP0].resource;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
     srv_desc.TextureCube.MostDetailedMip = 0;
     srv_desc.TextureCube.MipLevels = sky_tex->GetDesc().MipLevels;
@@ -858,6 +874,27 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     render_ctx->device->CreateShaderResourceView(sky_tex, &srv_desc, descriptor_cpu_handle);
 
     render_ctx->sky_tex_heap_index = 3;
+
+    // sky texture2
+    ID3D12Resource * sky_tex2 = render_ctx->textures[TEX_SKY_CUBEMAP1].resource;
+    srv_desc.TextureCube.MipLevels = sky_tex2->GetDesc().MipLevels;
+    srv_desc.Format = sky_tex2->GetDesc().Format;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(sky_tex2, &srv_desc, descriptor_cpu_handle);
+
+    // sky texture3
+    ID3D12Resource * sky_tex3 = render_ctx->textures[TEX_SKY_CUBEMAP2].resource;
+    srv_desc.TextureCube.MipLevels = sky_tex3->GetDesc().MipLevels;
+    srv_desc.Format = sky_tex3->GetDesc().Format;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(sky_tex3, &srv_desc, descriptor_cpu_handle);
+
+    // sky texture4
+    ID3D12Resource * sky_tex4 = render_ctx->textures[TEX_SKY_CUBEMAP3].resource;
+    srv_desc.TextureCube.MipLevels = sky_tex4->GetDesc().MipLevels;
+    srv_desc.Format = sky_tex4->GetDesc().Format;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(sky_tex4, &srv_desc, descriptor_cpu_handle);
 
     //
     // Create Render Target View Descriptor Heap
@@ -1251,13 +1288,15 @@ handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
-    if ((wParam & MK_LBUTTON) != 0) {
-        // make each pixel correspond to a quarter of a degree
-        float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
-        float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
+    if (global_mouse_active) {
+        if ((wParam & MK_LBUTTON) != 0) {
+            // make each pixel correspond to a quarter of a degree
+            float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
+            float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-        Camera_Pitch(global_camera, dy);
-        Camera_RotateY(global_camera, dx);
+            Camera_Pitch(global_camera, dy);
+            Camera_RotateY(global_camera, dx);
+        }
     }
     scene_ctx->mouse.x = x;
     scene_ctx->mouse.y = y;
@@ -1496,7 +1535,10 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->environment_ritems
     );
 
-    // -- indicate that the backbuffer will now be used to present
+    if (global_imgui_enabled)
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+
+// -- indicate that the backbuffer will now be used to present
     resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     // -- finish populating command list
@@ -1518,7 +1560,6 @@ draw_main (D3DRenderContext * render_ctx) {
 
     return ret;
 }
-
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
     _ASSERT_EXPR(scene_ctx, _T("scene_ctx not valid"));
@@ -1738,9 +1779,21 @@ d3d_resize (D3DRenderContext * render_ctx) {
 
     Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
 }
+static void
+check_active_item () {
+    if (ImGui::IsItemActive() || ImGui::IsItemHovered())
+        global_mouse_active = false;
+    else
+        global_mouse_active = true;
+}
+// Forward declare message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 static LRESULT CALLBACK
 main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // Handle imgui window
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam))
+        return true;
 
     // Handle passed user data (render_ctx)
     D3DRenderContext * _render_ctx = nullptr;
@@ -2028,13 +2081,37 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->textures[TEX_WHITE1x1].filename,
         &render_ctx->textures[TEX_WHITE1x1]
     );
-    // sky cube-map tex
-    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP].name, "tex_sky_cubemap");
-    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP].filename, L"../Textures/grasscube1024.dds");
+    // sky cube-map tex0
+    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP0].name, "tex_sky_cubemap");
+    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP0].filename, L"../Textures/grasscube1024.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_SKY_CUBEMAP].filename,
-        &render_ctx->textures[TEX_SKY_CUBEMAP]
+        render_ctx->textures[TEX_SKY_CUBEMAP0].filename,
+        &render_ctx->textures[TEX_SKY_CUBEMAP0]
+    );
+    // sky cube-map tex1
+    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP1].name, "tex_sky_cubemap1");
+    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP1].filename, L"../Textures/desertcube1024.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_SKY_CUBEMAP1].filename,
+        &render_ctx->textures[TEX_SKY_CUBEMAP1]
+    );
+    // sky cube-map tex2
+    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP2].name, "tex_sky_cubemap2");
+    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP2].filename, L"../Textures/snowcube1024.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_SKY_CUBEMAP2].filename,
+        &render_ctx->textures[TEX_SKY_CUBEMAP2]
+    );
+    // sky cube-map tex3
+    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP3].name, "tex_sky_cubemap3");
+    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP3].filename, L"../Textures/sunsetcube1024.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_SKY_CUBEMAP3].filename,
+        &render_ctx->textures[TEX_SKY_CUBEMAP3]
     );
 #pragma endregion
 
@@ -2188,10 +2265,57 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 #pragma endregion
 
+#pragma region Imgui Setup
+    bool * ptr_open = nullptr;
+    ImGuiWindowFlags window_flags = 0;
+    bool beginwnd;
+    int selected_mat = 0;
+    if (global_imgui_enabled) {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        io.Fonts->AddFontDefault();
+        ImGui::StyleColorsDark();
+
+        // calculate imgui cpu & gpu handles on location on srv_heap
+        D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+            _COUNT_TEX +
+            0     /* no other additional descriptor for now */
+            ));
+
+        D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+            _COUNT_TEX +
+            0     /* no other additional descriptor for now */
+            ));
+
+            // Setup Platform/Renderer backends
+        ImGui_ImplWin32_Init(hwnd);
+        ImGui_ImplDX12_Init(
+            render_ctx->device, NUM_QUEUING_FRAMES,
+            render_ctx->backbuffer_format, render_ctx->srv_heap,
+            imgui_cpu_handle,
+            imgui_gpu_handle
+        );
+
+        // Setup imgui window flags
+        window_flags |= ImGuiWindowFlags_NoScrollbar;
+        window_flags |= ImGuiWindowFlags_MenuBar;
+        //window_flags |= ImGuiWindowFlags_NoMove;
+        window_flags |= ImGuiWindowFlags_NoCollapse;
+        window_flags |= ImGuiWindowFlags_NoNav;
+        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
+        //window_flags |= ImGuiWindowFlags_NoResize;
+
+    }
+#pragma endregion
+
     // ========================================================================================================
 #pragma region Main_Loop
     global_paused = false;
     global_resizing = false;
+    global_mouse_active = true;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
 
@@ -2201,6 +2325,39 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         } else {
+#pragma region Imgui window
+            if (global_imgui_enabled) {
+                ImGui_ImplDX12_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+                ImGui::Begin("Settings", ptr_open, window_flags);
+                beginwnd = ImGui::IsItemActive();
+
+                ImGui::Combo(
+                    "Skybox Texture", &selected_mat,
+                    "   Grass Cube\0   Desert Cube\0   Snow Cube\0   Sunset Cube\0\0");
+
+                ImGui::Text("\n");
+                ImGui::Separator();
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+                ImGui::End();
+                ImGui::Render();
+
+                // choose skybox texture
+                if (0 == selected_mat)
+                    render_ctx->sky_tex_heap_index = 3;
+                else if (1 == selected_mat)
+                    render_ctx->sky_tex_heap_index = 4;
+                else if (2 == selected_mat)
+                    render_ctx->sky_tex_heap_index = 5;
+                else if (3 == selected_mat)
+                    render_ctx->sky_tex_heap_index = 6;
+
+                // control mouse activation
+                global_mouse_active = !(beginwnd);
+            }
+#pragma endregion
             Timer_Tick(&global_timer);
 
             if (!global_paused) {
@@ -2223,6 +2380,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // ========================================================================================================
 #pragma region Cleanup_And_Debug
     flush_command_queue(render_ctx);
+
+    // Cleanup Imgui
+    if (global_imgui_enabled) {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+    }
 
     // release queuing frame resources
     for (size_t i = 0; i < NUM_QUEUING_FRAMES; i++) {
