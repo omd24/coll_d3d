@@ -41,14 +41,12 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_FRUSTUM_CULLING
-
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
-    LAYER_HIGHLIGHT = 1,
+    LAYER_SKY = 1,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -59,9 +57,10 @@ enum ALL_RENDERITEMS {
     _COUNT_RENDERITEM
 };
 enum SHADERS_CODE {
-    SHADER_DEFAULT_VS = 0,
+    SHADER_STANDARD_VS = 0,
     SHADER_OPAQUE_PS = 1,
-    SHADER_ALPHATEST_PS = 2,
+    SHADER_SKY_VS = 2,
+    SHADER_SKY_PS = 3,
 
     _COUNT_SHADERS
 };
@@ -77,7 +76,10 @@ enum MAT_INDEX {
     _COUNT_MATERIAL
 };
 enum TEX_INDEX {
-    TEX_WHITE1x1 = 0,
+    TEX_BRICK = 0,
+    TEX_TILE = 1,
+    TEX_WHITE1x1 = 2,
+    TEX_SKY_CUBEMAP = 3,
 
     _COUNT_TEX
 };
@@ -114,12 +116,6 @@ bool global_resizing;
 RenderItem * global_picked_ritem;
 SceneContext global_scene_ctx;
 
-#if defined(ENABLE_FRUSTUM_CULLING)
-bool global_frustumculling_enabled = true;
-#else
-bool global_frustumculling_enabled = false;
-#endif // defined(ENABLE_FRUSTUM_CULLING)
-
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
     uint32_t    size;
@@ -155,6 +151,8 @@ struct D3DRenderContext {
     ID3D12DescriptorHeap *          rtv_heap;
     ID3D12DescriptorHeap *          dsv_heap;
     ID3D12DescriptorHeap *          srv_heap;
+
+    UINT                            sky_tex_heap_index;
 
     PassConstants                   main_pass_constants;
     UINT                            pass_cbv_offset;
@@ -269,7 +267,7 @@ create_materials (Material out_materials []) {
 }
 static void
 create_car_geometry (D3DRenderContext * render_ctx) {
-
+...
 #pragma region Read_Data_File
     FILE * f = nullptr;
     errno_t err = fopen_s(&f, "./models/car.txt", "r");
@@ -487,6 +485,8 @@ draw_render_items (
 }
 static void
 create_descriptor_heaps (D3DRenderContext * render_ctx) {
+    _ASSERT_EXPR(render_ctx->cbv_srv_uav_descriptor_size > 0, _T("invalid descriptor size value"));
+
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors = _COUNT_TEX;
@@ -497,16 +497,42 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     // Fill out the heap with actual descriptors
     D3D12_CPU_DESCRIPTOR_HANDLE descriptor_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
 
-    // default texture
-    ID3D12Resource * default_tex = render_ctx->textures[TEX_WHITE1x1].resource;
+    // brick texture
+    ID3D12Resource * brick_tex = render_ctx->textures[TEX_BRICK].resource;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = default_tex->GetDesc().Format;
+    srv_desc.Format = brick_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = default_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = brick_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+    render_ctx->device->CreateShaderResourceView(brick_tex, &srv_desc, descriptor_cpu_handle);
+
+    // tile texture
+    ID3D12Resource * tile_tex = render_ctx->textures[TEX_TILE].resource;
+    srv_desc.Format = tile_tex->GetDesc().Format;
+    srv_desc.Texture2D.MipLevels = tile_tex->GetDesc().MipLevels;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(tile_tex, &srv_desc, descriptor_cpu_handle);
+
+    // default texture
+    ID3D12Resource * default_tex = render_ctx->textures[TEX_WHITE1x1].resource;
+    srv_desc.Format = default_tex->GetDesc().Format;
+    srv_desc.Texture2D.MipLevels = default_tex->GetDesc().MipLevels;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
     render_ctx->device->CreateShaderResourceView(default_tex, &srv_desc, descriptor_cpu_handle);
+
+    // sky texture
+    ID3D12Resource * sky_tex = render_ctx->textures[TEX_SKY_CUBEMAP].resource;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    srv_desc.TextureCube.MostDetailedMip = 0;
+    srv_desc.TextureCube.MipLevels = sky_tex->GetDesc().MipLevels;
+    srv_desc.TextureCube.ResourceMinLODClamp = 0.0f;
+    srv_desc.Format = sky_tex->GetDesc().Format;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(sky_tex, &srv_desc, descriptor_cpu_handle);
+
+    render_ctx->sky_tex_heap_index = 3;
 
     //
     // Create Render Target View Descriptor Heap
@@ -625,40 +651,53 @@ get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
 }
 static void
 create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
-    D3D12_DESCRIPTOR_RANGE tex_table = {};
-    tex_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    tex_table.NumDescriptors = _COUNT_TEX;
-    tex_table.BaseShaderRegister = 0;
-    tex_table.RegisterSpace = 0;
-    tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    // -- sky cube map
+    D3D12_DESCRIPTOR_RANGE tex_table0 = {};
+    tex_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table0.NumDescriptors = 1;
+    tex_table0.BaseShaderRegister = 0;  //t0
+    tex_table0.RegisterSpace = 0;       //space0
+    tex_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // NOTE(omid): The 4 elements of array of textures occupy registers t0, t1, t2, t3
+    // -- rest of textures
+    D3D12_DESCRIPTOR_RANGE tex_table1 = {};
+    tex_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table1.NumDescriptors = _COUNT_TEX;
+    tex_table1.BaseShaderRegister = 1;  //t1
+    tex_table1.RegisterSpace = 0;       //space0
+    tex_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
+    D3D12_ROOT_PARAMETER slot_root_params[5] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    // -- structured buffer <material data>
+    // -- obj cbuffer
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    slot_root_params[0].Descriptor.ShaderRegister = 0;
+    slot_root_params[0].Descriptor.ShaderRegister = 0;  //b0
     slot_root_params[0].Descriptor.RegisterSpace = 0;
     slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // -- structured buffer <instance data>
+    // -- pass cbuffer
     slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    slot_root_params[1].Descriptor.ShaderRegister = 1;
+    slot_root_params[1].Descriptor.ShaderRegister = 1;  //b1
     slot_root_params[1].Descriptor.RegisterSpace = 0;
     slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // -- pass cbuffer
+    // -- material sbuffer
     slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    slot_root_params[2].Descriptor.ShaderRegister = 0;
-    slot_root_params[2].Descriptor.RegisterSpace = 1;
+    slot_root_params[2].Descriptor.ShaderRegister = 0;  //t0
+    slot_root_params[2].Descriptor.RegisterSpace = 1;   //space1
     slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // -- textures
+    // -- sky cubemap texture
     slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[3].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table;
-    slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table0;
+    slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // -- textures
+    slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[4].DescriptorTable.pDescriptorRanges = &tex_table1;
+    slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
     get_static_samplers(samplers);
@@ -758,22 +797,6 @@ create_pso (D3DRenderContext * render_ctx) {
     std_input_desc[2].AlignedByteOffset = 24;
     std_input_desc[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
-    D3D12_INPUT_ELEMENT_DESC treesprite_input_desc[2];
-    treesprite_input_desc[0] = {};
-    treesprite_input_desc[0].SemanticName = "POSITION";
-    treesprite_input_desc[0].SemanticIndex = 0;
-    treesprite_input_desc[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    treesprite_input_desc[0].InputSlot = 0;
-    treesprite_input_desc[0].AlignedByteOffset = 0;
-    treesprite_input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-
-    treesprite_input_desc[1] = {};
-    treesprite_input_desc[1].SemanticName = "SIZE";
-    treesprite_input_desc[1].SemanticIndex = 0;
-    treesprite_input_desc[1].Format = DXGI_FORMAT_R32G32_FLOAT;
-    treesprite_input_desc[1].InputSlot = 0;
-    treesprite_input_desc[1].AlignedByteOffset = 12;
-    treesprite_input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
     //
     // -- Create PSO for Opaque objs
     //
@@ -817,8 +840,8 @@ create_pso (D3DRenderContext * render_ctx) {
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
     opaque_pso_desc.pRootSignature = render_ctx->root_signature;
-    opaque_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferPointer();
-    opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferSize();
+    opaque_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferPointer();
+    opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferSize();
     opaque_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
     opaque_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
     opaque_pso_desc.BlendState = def_blend_desc;
@@ -937,8 +960,8 @@ ray_pick (int sx, int sy, int ritems_count, RenderItem ritems []) {
         /*
             If we hit the bounding box of the mesh, then we might have picked a mesh triangle,
             so do the ray/triangle tests.
-            
-            If we did not hit the bounding box, then it is impossible that we hit 
+
+            If we did not hit the bounding box, then it is impossible that we hit
             the mesh, so do not waste effort doing ray/triangle tests.
         */
         float tmin = 0.0f;
@@ -993,7 +1016,7 @@ handle_mouse_down (
     int x, int y,
     HWND hwnd,
     int ritems_count,
-    RenderItem ritems[]
+    RenderItem ritems []
 ) {
     if ((wparam & MK_LBUTTON) != 0) {
         scene_ctx->mouse.x = x;
@@ -1206,7 +1229,7 @@ draw_main (D3DRenderContext * render_ctx) {
 
     // 2. draw highlighted obj(s)
     render_ctx->highlight_ritems.ritems[0] = *global_picked_ritem;
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_HIGHLIGHT]);
+    //cmdlist->SetPipelineState(render_ctx->psos[LAYER_HIGHLIGHT]);
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
@@ -1567,7 +1590,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     size_t cam_size = Camera_CalculateRequiredSize();
     global_camera = (Camera *)malloc(cam_size);
     Camera_Init(global_camera);
-    Camera_SetPosition(global_camera, 10.0f, 5.0f, -45.0f);
+    Camera_SetPosition(global_camera, 0.0f, 2.0f, -15.0f);
     {
         XMFLOAT3 cam_pos = XMFLOAT3(5.0f, 4.0f, -15.0f);
         XMFLOAT3 cam_target = XMFLOAT3(0.0f, 1.0f, 0.0f);
@@ -1735,6 +1758,22 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 // ========================================================================================================
 #pragma region Load Textures
+    // brick tex
+    strcpy_s(render_ctx->textures[TEX_BRICK].name, "tex_brick");
+    wcscpy_s(render_ctx->textures[TEX_BRICK].filename, L"../Textures/bricks2.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_BRICK].filename,
+        &render_ctx->textures[TEX_BRICK]
+    );
+    // tile tex
+    strcpy_s(render_ctx->textures[TEX_TILE].name, "tex_tile");
+    wcscpy_s(render_ctx->textures[TEX_TILE].filename, L"../Textures/tile.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_TILE].filename,
+        &render_ctx->textures[TEX_TILE]
+    );
     // default tex
     strcpy_s(render_ctx->textures[TEX_WHITE1x1].name, "tex_default");
     wcscpy_s(render_ctx->textures[TEX_WHITE1x1].filename, L"../Textures/white1x1.dds");
@@ -1742,6 +1781,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->device, render_ctx->direct_cmd_list,
         render_ctx->textures[TEX_WHITE1x1].filename,
         &render_ctx->textures[TEX_WHITE1x1]
+    );
+    // sky cube-map tex
+    strcpy_s(render_ctx->textures[TEX_SKY_CUBEMAP].name, "tex_sky_cubemap");
+    wcscpy_s(render_ctx->textures[TEX_SKY_CUBEMAP].filename, L"../Textures/grasscube1024.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_SKY_CUBEMAP].filename,
+        &render_ctx->textures[TEX_SKY_CUBEMAP]
     );
 #pragma endregion
 
@@ -1844,26 +1891,21 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // Load and compile shaders
 
 #pragma region Compile Shaders
-    TCHAR shaders_path [] = _T("./shaders/default.hlsl");
-    TCHAR tree_shader_path []= _T("./shaders/tree_sprite.hlsl");
-    TCHAR wavesim_shader_path []= _T("./shaders/wave_sim.hlsl");
-    TCHAR blur_shader_path [] = _T("./shaders/blur.hlsl");
-    TCHAR sobel_shader_path []= _T("./shaders/sobel.hlsl");
-    TCHAR composite_shader_path [] = _T("./shaders/composite.hlsl");
+    TCHAR standard_shader_path [] = _T("./shaders/default.hlsl");
+    TCHAR sky_shader_path [] = _T("./shaders/sky.hlsl");
 
     {   // standard shaders
-        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
+        compile_shader(standard_shader_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_STANDARD_VS]);
 
         int const n_define_fog = 1;
         DxcDefine defines_fog[n_define_fog] = {};
         defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
+        compile_shader(standard_shader_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
+    }
+    {   // sky shaders
+        compile_shader(standard_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_VS]);
 
-        int const n_define_alphatest = 2;
-        DxcDefine defines_alphatest[n_define_alphatest] = {};
-        defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_ALPHATEST_PS]);
+        compile_shader(standard_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_PS]);
     }
 #pragma endregion
 

@@ -630,23 +630,21 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     tex_table.RegisterSpace = 0;
     tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // NOTE(omid): The 4 elements of array of textures occupy registers t0, t1, t2, t3
-
     D3D12_ROOT_PARAMETER slot_root_params[4] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    // -- structured buffer <material data>
+    // -- obj cbuffer
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     slot_root_params[0].Descriptor.ShaderRegister = 0;
     slot_root_params[0].Descriptor.RegisterSpace = 0;
     slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // -- structured buffer <instance data>
+    // -- pass cbuffer
     slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     slot_root_params[1].Descriptor.ShaderRegister = 1;
     slot_root_params[1].Descriptor.RegisterSpace = 0;
     slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // -- pass cbuffer
+    // -- mat sbuffer
     slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     slot_root_params[2].Descriptor.ShaderRegister = 0;
     slot_root_params[2].Descriptor.RegisterSpace = 1;
