@@ -51,11 +51,36 @@ enum RENDER_LAYER : int {
     _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_CAR = 0,
-    RITEM_PICKED = 1,
+    RITEM_SKULL = 0,
+    RITEM_SKY = 1,
+    RITEM_BOX = 2,
+    RITEM_GRID = 3,
+
+    // NOTE(omid): following indices are meaningless. DON'T use them! 
+    RITEM_CYLENDER0 = 4,
+    RITEM_CYLENDER1,
+    RITEM_CYLENDER2,
+    RITEM_CYLENDER3,
+    RITEM_CYLENDER4,
+    RITEM_CYLENDER5,
+    RITEM_CYLENDER6,
+    RITEM_CYLENDER7,
+    RITEM_CYLENDER8,
+    RITEM_CYLENDER9,
+    RITEM_SPHERE0 = 14,
+    RITEM_SPHERE1,
+    RITEM_SPHERE2,
+    RITEM_SPHERE3,
+    RITEM_SPHERE4,
+    RITEM_SPHERE5,
+    RITEM_SPHERE6,
+    RITEM_SPHERE7,
+    RITEM_SPHERE8,
+    RITEM_SPHERE9,
 
     _COUNT_RENDERITEM
 };
+static_assert(24 == _COUNT_RENDERITEM, _T("invalid render items count"));
 enum SHADERS_CODE {
     SHADER_STANDARD_VS = 0,
     SHADER_OPAQUE_PS = 1,
@@ -65,13 +90,23 @@ enum SHADERS_CODE {
     _COUNT_SHADERS
 };
 enum GEOM_INDEX {
-    GEOM_CAR = 0,
+    GEOM_SKULL = 0,
+    GEOM_SHAPES = 1,
 
     _COUNT_GEOM
 };
+enum SUBMESH_INDEX {
+    _BOX_ID,
+    _GRID_ID,
+    _SPHERE_ID,
+    _CYLINDER_ID
+};
 enum MAT_INDEX {
-    MAT_GRAY = 0,
-    MAT_HIGHLIGHT = 1,
+    MAT_BRICK = 0,
+    MAT_TILE = 1,
+    MAT_MIRROR = 2,
+    MAT_SKULL = 3,
+    MAT_SKY = 4,
 
     _COUNT_MATERIAL
 };
@@ -109,11 +144,9 @@ struct SceneContext {
 };
 
 Camera * global_camera;
-BoundingFrustum global_cam_frustum;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
-RenderItem * global_picked_ritem;
 SceneContext global_scene_ctx;
 
 struct RenderItemArray {
@@ -161,7 +194,7 @@ struct D3DRenderContext {
     RenderItemArray                 all_ritems;
     // Render items divided by PSO.
     RenderItemArray                 opaque_ritems;
-    RenderItemArray                 highlight_ritems;
+    RenderItemArray                 environment_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -247,30 +280,56 @@ load_texture (
 }
 static void
 create_materials (Material out_materials []) {
-    strcpy_s(out_materials[MAT_GRAY].name, "gray");
-    out_materials[MAT_GRAY].mat_cbuffer_index = 0;
-    out_materials[MAT_GRAY].diffuse_srvheap_index = 0;
-    out_materials[MAT_GRAY].diffuse_albedo = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
-    out_materials[MAT_GRAY].fresnel_r0 = XMFLOAT3(0.04f, 0.04f, 0.04f);
-    out_materials[MAT_GRAY].roughness = 0.0f;
-    out_materials[MAT_GRAY].mat_transform = Identity4x4();
-    out_materials[MAT_GRAY].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_BRICK].name, "bricks");
+    out_materials[MAT_BRICK].mat_cbuffer_index = 0;
+    out_materials[MAT_BRICK].diffuse_srvheap_index = 0;
+    out_materials[MAT_BRICK].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_BRICK].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+    out_materials[MAT_BRICK].roughness = 0.3f;
+    out_materials[MAT_BRICK].mat_transform = Identity4x4();
+    out_materials[MAT_BRICK].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    strcpy_s(out_materials[MAT_HIGHLIGHT].name, "highlight");
-    out_materials[MAT_HIGHLIGHT].mat_cbuffer_index = 1;
-    out_materials[MAT_HIGHLIGHT].diffuse_srvheap_index = 0;
-    out_materials[MAT_HIGHLIGHT].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.6f);
-    out_materials[MAT_HIGHLIGHT].fresnel_r0 = XMFLOAT3(0.06f, 0.06f, 0.06f);
-    out_materials[MAT_HIGHLIGHT].roughness = 0.0f;
-    out_materials[MAT_HIGHLIGHT].mat_transform = Identity4x4();
-    out_materials[MAT_HIGHLIGHT].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_TILE].name, "tile");
+    out_materials[MAT_TILE].mat_cbuffer_index = 1;
+    out_materials[MAT_TILE].diffuse_srvheap_index = 1;
+    out_materials[MAT_TILE].diffuse_albedo = XMFLOAT4(0.9f, 0.9f, 0.9f, 1.0f);
+    out_materials[MAT_TILE].fresnel_r0 = XMFLOAT3(0.2f, 0.2f, 0.2f);
+    out_materials[MAT_TILE].roughness = 0.1f;
+    out_materials[MAT_TILE].mat_transform = Identity4x4();
+    out_materials[MAT_TILE].n_frames_dirty = NUM_QUEUING_FRAMES;
+
+    strcpy_s(out_materials[MAT_MIRROR].name, "mirror");
+    out_materials[MAT_MIRROR].mat_cbuffer_index = 2;
+    out_materials[MAT_MIRROR].diffuse_srvheap_index = 2;
+    out_materials[MAT_MIRROR].diffuse_albedo = XMFLOAT4(0.0f, 0.0f, 0.1f, 1.0f);
+    out_materials[MAT_MIRROR].fresnel_r0 = XMFLOAT3(0.98f, 0.97f, 0.95f);
+    out_materials[MAT_MIRROR].roughness = 0.1f;
+    out_materials[MAT_MIRROR].mat_transform = Identity4x4();
+    out_materials[MAT_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+
+    strcpy_s(out_materials[MAT_SKULL].name, "skull");
+    out_materials[MAT_SKULL].mat_cbuffer_index = 3;
+    out_materials[MAT_SKULL].diffuse_srvheap_index = 2;
+    out_materials[MAT_SKULL].diffuse_albedo = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+    out_materials[MAT_SKULL].fresnel_r0 = XMFLOAT3(0.2f, 0.2f, 0.2f);
+    out_materials[MAT_SKULL].roughness = 0.2f;
+    out_materials[MAT_SKULL].mat_transform = Identity4x4();
+    out_materials[MAT_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+
+    strcpy_s(out_materials[MAT_SKY].name, "sky");
+    out_materials[MAT_SKY].mat_cbuffer_index = 4;
+    out_materials[MAT_SKY].diffuse_srvheap_index = 3;
+    out_materials[MAT_SKY].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_SKY].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+    out_materials[MAT_SKY].roughness = 1.0f;
+    out_materials[MAT_SKY].mat_transform = Identity4x4();
+    out_materials[MAT_SKY].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
-create_car_geometry (D3DRenderContext * render_ctx) {
-...
+create_skull_geometry (D3DRenderContext * render_ctx) {
 #pragma region Read_Data_File
     FILE * f = nullptr;
-    errno_t err = fopen_s(&f, "./models/car.txt", "r");
+    errno_t err = fopen_s(&f, "./models/skull.txt", "r");
     if (0 == f || err != 0) {
         printf("could not open file\n");
         return;
@@ -382,20 +441,20 @@ create_car_geometry (D3DRenderContext * render_ctx) {
     UINT vb_byte_size = vcount * sizeof(Vertex);
     UINT ib_byte_size = (tcount * 3) * sizeof(uint32_t);
 
-    // -- Fill out render_ctx geom[GEOM_CAR] (skull)
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_CAR].vb_cpu);
-    CopyMemory(render_ctx->geom[GEOM_CAR].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+    // -- Fill out render_ctx geom[GEOM_SKULL] (skull)
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_SKULL].vb_cpu);
+    CopyMemory(render_ctx->geom[GEOM_SKULL].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_CAR].ib_cpu);
-    CopyMemory(render_ctx->geom[GEOM_CAR].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_SKULL].ib_cpu);
+    CopyMemory(render_ctx->geom[GEOM_SKULL].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_CAR].vb_uploader, &render_ctx->geom[GEOM_CAR].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_CAR].ib_uploader, &render_ctx->geom[GEOM_CAR].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_SKULL].vb_uploader, &render_ctx->geom[GEOM_SKULL].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_SKULL].ib_uploader, &render_ctx->geom[GEOM_SKULL].ib_gpu);
 
-    render_ctx->geom[GEOM_CAR].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_CAR].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_CAR].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_CAR].index_format = DXGI_FORMAT_R32_UINT;
+    render_ctx->geom[GEOM_SKULL].vb_byte_stide = sizeof(Vertex);
+    render_ctx->geom[GEOM_SKULL].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_SKULL].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_SKULL].index_format = DXGI_FORMAT_R32_UINT;
 
     SubmeshGeometry submesh = {};
     submesh.index_count = tcount * 3;
@@ -403,57 +462,310 @@ create_car_geometry (D3DRenderContext * render_ctx) {
     submesh.base_vertex_location = 0;
     submesh.bounds = bounds;
 
-    render_ctx->geom[GEOM_CAR].submesh_names[0] = "car";
-    render_ctx->geom[GEOM_CAR].submesh_geoms[0] = submesh;
+    render_ctx->geom[GEOM_SKULL].submesh_names[0] = "skull";
+    render_ctx->geom[GEOM_SKULL].submesh_geoms[0] = submesh;
 
     // -- cleanup
     free(vertices);
     free(indices);
 }
+#define _BOX_VTX_CNT   24
+#define _BOX_IDX_CNT   36
+
+#define _GRID_VTX_CNT   2400
+#define _GRID_IDX_CNT   13806
+
+#define _SPHERE_VTX_CNT   401
+#define _SPHERE_IDX_CNT   2280
+
+#define _CYLINDER_VTX_CNT   485
+#define _CYLINDER_IDX_CNT   2520
+
+#define _TOTAL_VTX_CNT  (_BOX_VTX_CNT + _GRID_VTX_CNT + _SPHERE_VTX_CNT + _CYLINDER_VTX_CNT)
+#define _TOTAL_IDX_CNT  (_BOX_IDX_CNT + _GRID_IDX_CNT + _SPHERE_IDX_CNT + _CYLINDER_IDX_CNT)
+
+static void
+create_shapes_geometry (D3DRenderContext * render_ctx) {
+
+    Vertex *    vertices = (Vertex *)::malloc(sizeof(Vertex) * _TOTAL_VTX_CNT);
+    uint16_t *  indices = (uint16_t *)::malloc(sizeof(uint16_t) * _TOTAL_IDX_CNT);
+    BYTE *      scratch = (BYTE *)::malloc(sizeof(GeomVertex) * _TOTAL_VTX_CNT + sizeof(uint16_t) * _TOTAL_IDX_CNT);
+
+    // box
+    UINT bsz = sizeof(GeomVertex) * _BOX_VTX_CNT;
+    UINT bsz_id = bsz + sizeof(uint16_t) * _BOX_IDX_CNT;
+    // grid
+    UINT gsz = bsz_id + sizeof(GeomVertex) * _GRID_VTX_CNT;
+    UINT gsz_id = gsz + sizeof(uint16_t) * _GRID_IDX_CNT;
+    // sphere
+    UINT ssz = gsz_id + sizeof(GeomVertex) * _SPHERE_VTX_CNT;
+    UINT ssz_id = ssz + sizeof(uint16_t) * _SPHERE_IDX_CNT;
+    // cylinder
+    UINT csz = ssz_id + sizeof(GeomVertex) * _CYLINDER_VTX_CNT;
+    //UINT csz_id = csz + sizeof(uint16_t) * _CYLINDER_IDX_CNT; // not used
+
+    GeomVertex *    box_vertices = reinterpret_cast<GeomVertex *>(scratch);
+    uint16_t *      box_indices = reinterpret_cast<uint16_t *>(scratch + bsz);
+    GeomVertex *    grid_vertices = reinterpret_cast<GeomVertex *>(scratch + bsz_id);
+    uint16_t *      grid_indices = reinterpret_cast<uint16_t *>(scratch + gsz);
+    GeomVertex *    sphere_vertices = reinterpret_cast<GeomVertex *>(scratch + gsz_id);
+    uint16_t *      sphere_indices = reinterpret_cast<uint16_t *>(scratch + ssz);
+    GeomVertex *    cylinder_vertices = reinterpret_cast<GeomVertex *>(scratch + ssz_id);
+    uint16_t *      cylinder_indices = reinterpret_cast<uint16_t *>(scratch + csz);
+
+    create_box(1.5f, 0.5f, 1.5f, box_vertices, box_indices);
+    create_grid16(20.0f, 30.0f, 60, 40, grid_vertices, grid_indices);
+    create_sphere(0.5f, sphere_vertices, sphere_indices);
+    create_cylinder(0.5f, 0.3f, 3.0f, cylinder_vertices, cylinder_indices);
+
+    // We are concatenating all the geometry into one big vertex/index buffer.  So
+    // define the regions in the buffer each submesh covers.
+
+    // Cache the vertex offsets to each object in the concatenated vertex buffer.
+    UINT box_vertex_offset = 0;
+    UINT grid_vertex_offset = _BOX_VTX_CNT;
+    UINT sphere_vertex_offset = grid_vertex_offset + _GRID_VTX_CNT;
+    UINT cylinder_vertex_offset = sphere_vertex_offset + _SPHERE_VTX_CNT;
+
+    // Cache the starting index for each object in the concatenated index buffer.
+    UINT box_index_offset = 0;
+    UINT grid_index_offset = _BOX_IDX_CNT;
+    UINT sphere_index_offset = grid_index_offset + _GRID_IDX_CNT;
+    UINT cylinder_index_offsett = sphere_index_offset + _SPHERE_IDX_CNT;
+
+    // Define the SubmeshGeometry that cover different 
+    // regions of the vertex/index buffers.
+    SubmeshGeometry box_submesh = {};
+    box_submesh.index_count = _BOX_IDX_CNT;
+    box_submesh.start_index_location = box_index_offset;
+    box_submesh.base_vertex_location = box_vertex_offset;
+
+    SubmeshGeometry grid_submesh = {};
+    grid_submesh.index_count = _GRID_IDX_CNT;
+    grid_submesh.start_index_location = grid_index_offset;
+    grid_submesh.base_vertex_location = grid_vertex_offset;
+
+    SubmeshGeometry sphere_submesh = {};
+    sphere_submesh.index_count = _SPHERE_IDX_CNT;
+    sphere_submesh.start_index_location = sphere_index_offset;
+    sphere_submesh.base_vertex_location = sphere_vertex_offset;
+
+    SubmeshGeometry cylinder_submesh = {};
+    cylinder_submesh.index_count = _CYLINDER_IDX_CNT;
+    cylinder_submesh.start_index_location = cylinder_index_offsett;
+    cylinder_submesh.base_vertex_location = cylinder_vertex_offset;
+
+    // Extract the vertex elements we are interested in and pack the
+    // vertices of all the meshes into one vertex buffer.
+
+    UINT k = 0;
+    for (size_t i = 0; i < _BOX_VTX_CNT; ++i, ++k) {
+        vertices[k].position = box_vertices[i].Position;
+        vertices[k].normal = box_vertices[i].Normal;
+        vertices[k].texc = box_vertices[i].TexC;
+    }
+
+    for (size_t i = 0; i < _GRID_VTX_CNT; ++i, ++k) {
+        vertices[k].position = grid_vertices[i].Position;
+        vertices[k].normal = grid_vertices[i].Normal;
+        vertices[k].texc = grid_vertices[i].TexC;
+    }
+
+    for (size_t i = 0; i < _SPHERE_VTX_CNT; ++i, ++k) {
+        vertices[k].position = sphere_vertices[i].Position;
+        vertices[k].normal = sphere_vertices[i].Normal;
+        vertices[k].texc = sphere_vertices[i].TexC;
+    }
+
+    for (size_t i = 0; i < _CYLINDER_VTX_CNT; ++i, ++k) {
+        vertices[k].position = cylinder_vertices[i].Position;
+        vertices[k].normal = cylinder_vertices[i].Normal;
+        vertices[k].texc = cylinder_vertices[i].TexC;
+    }
+
+    // -- pack indices
+    k = 0;
+    for (size_t i = 0; i < _BOX_IDX_CNT; ++i, ++k) {
+        indices[k] = box_indices[i];
+    }
+
+    for (size_t i = 0; i < _GRID_IDX_CNT; ++i, ++k) {
+        indices[k] = grid_indices[i];
+    }
+
+    for (size_t i = 0; i < _SPHERE_IDX_CNT; ++i, ++k) {
+        indices[k] = sphere_indices[i];
+    }
+
+    for (size_t i = 0; i < _CYLINDER_IDX_CNT; ++i, ++k) {
+        indices[k] = cylinder_indices[i];
+    }
+
+    UINT vb_byte_size = _TOTAL_VTX_CNT * sizeof(Vertex);
+    UINT ib_byte_size = _TOTAL_IDX_CNT * sizeof(uint16_t);
+
+    // -- Fill out render_ctx geom[0] (shapes)
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_SHAPES].vb_cpu);
+    if (vertices)
+        CopyMemory(render_ctx->geom[GEOM_SHAPES].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_SHAPES].ib_cpu);
+    if (indices)
+        CopyMemory(render_ctx->geom[GEOM_SHAPES].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_SHAPES].vb_uploader, &render_ctx->geom[GEOM_SHAPES].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_SHAPES].ib_uploader, &render_ctx->geom[GEOM_SHAPES].ib_gpu);
+
+    render_ctx->geom[GEOM_SHAPES].vb_byte_stide = sizeof(Vertex);
+    render_ctx->geom[GEOM_SHAPES].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_SHAPES].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_SHAPES].index_format = DXGI_FORMAT_R16_UINT;
+
+    render_ctx->geom[GEOM_SHAPES].submesh_names[_BOX_ID] = "box";
+    render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID] = box_submesh;
+    render_ctx->geom[GEOM_SHAPES].submesh_names[_GRID_ID] = "grid";
+    render_ctx->geom[GEOM_SHAPES].submesh_geoms[_GRID_ID] = grid_submesh;
+    render_ctx->geom[GEOM_SHAPES].submesh_names[_SPHERE_ID] = "shpere";
+    render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID] = sphere_submesh;
+    render_ctx->geom[GEOM_SHAPES].submesh_names[_CYLINDER_ID] = "cylinder";
+    render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID] = cylinder_submesh;
+
+    // -- cleanup
+    free(scratch);
+    free(indices);
+    free(vertices);
+}
 static void
 create_render_items (D3DRenderContext * render_ctx) {
-
-    render_ctx->all_ritems.ritems[RITEM_CAR].world = Identity4x4();
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_CAR].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_CAR].obj_cbuffer_index = 0;
-    render_ctx->all_ritems.ritems[RITEM_CAR].mat = &render_ctx->materials[MAT_GRAY];
-    render_ctx->all_ritems.ritems[RITEM_CAR].geometry = &render_ctx->geom[GEOM_CAR];
-    render_ctx->all_ritems.ritems[RITEM_CAR].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_CAR].index_count = render_ctx->geom[GEOM_CAR].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_CAR].start_index_loc = render_ctx->geom[GEOM_CAR].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_CAR].base_vertex_loc = render_ctx->geom[GEOM_CAR].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_CAR].bounds = render_ctx->geom[GEOM_CAR].submesh_geoms[0].bounds;
-    render_ctx->all_ritems.ritems[RITEM_CAR].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_CAR].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_CAR].initialized = true;
-    render_ctx->all_ritems.ritems[RITEM_CAR].visible = true;
+    // sky
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKY].world, XMMatrixScaling(5000.0f, 5000.0f, 5000.0f));
+    render_ctx->all_ritems.ritems[RITEM_SKY].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_SKY].obj_cbuffer_index = 0;
+    render_ctx->all_ritems.ritems[RITEM_SKY].mat = &render_ctx->materials[MAT_SKY];
+    render_ctx->all_ritems.ritems[RITEM_SKY].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_SKY].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_SKY].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_SKY].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_SKY].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_SKY].bounds = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].bounds;
+    render_ctx->all_ritems.ritems[RITEM_SKY].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKY].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKY].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_SKY].visible = true;
     render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_CAR];
-    render_ctx->opaque_ritems.size++;
+    render_ctx->environment_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKY];
+    render_ctx->environment_ritems.size++;
 
-    render_ctx->all_ritems.ritems[RITEM_PICKED].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_PICKED].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_PICKED].obj_cbuffer_index = 1;
-    render_ctx->all_ritems.ritems[RITEM_PICKED].mat = &render_ctx->materials[MAT_HIGHLIGHT];
-    render_ctx->all_ritems.ritems[RITEM_PICKED].geometry = &render_ctx->geom[GEOM_CAR];
-    render_ctx->all_ritems.ritems[RITEM_PICKED].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    // box
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
+    render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
 
-    // draw parameters are calculated when picking
-    render_ctx->all_ritems.ritems[RITEM_PICKED].index_count = 0;
-    render_ctx->all_ritems.ritems[RITEM_PICKED].start_index_loc = 0;
-    render_ctx->all_ritems.ritems[RITEM_PICKED].base_vertex_loc = 0;
+    // skull
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
+    render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
+    render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_SKULL];
+    render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].index_count = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].start_index_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
 
-    render_ctx->all_ritems.ritems[RITEM_PICKED].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_PICKED].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_PICKED].initialized = true;
+    // grid
+    render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform, XMMatrixScaling(8.0f, 8.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 3;
+    render_ctx->all_ritems.ritems[RITEM_GRID].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_GRID].mat = &render_ctx->materials[MAT_TILE];
+    render_ctx->all_ritems.ritems[RITEM_GRID].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_GRID].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_GRID_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_GRID].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_GRID_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_GRID].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_GRID_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GRID];
 
-    // picked triangle is not visible until one is picked.
-    render_ctx->all_ritems.ritems[RITEM_PICKED].visible = false;
+    // cylinders and spheres
+    XMMATRIX brick_tex_transform = XMMatrixScaling(1.0f, 1.0f, 1.0f);
+    UINT obj_cb_index = 4;
+    int _curr = 4;
+    for (int i = 0; i < 5; ++i) {
+        XMMATRIX left_cylinder_world = XMMatrixTranslation(-5.0f, 1.5f, -10.0f + i * 5.0f);
+        XMMATRIX right_cylinder_world = XMMatrixTranslation(+5.0f, 1.5f, -10.0f + i * 5.0f);
 
-    render_ctx->all_ritems.size++;
-    global_picked_ritem = &render_ctx->all_ritems.ritems[RITEM_PICKED];
-    render_ctx->highlight_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_PICKED];
-    render_ctx->highlight_ritems.size++;
+        XMMATRIX left_sphere_world = XMMatrixTranslation(-5.0f, 3.5f, -10.0f + i * 5.0f);
+        XMMATRIX right_sphere_world = XMMatrixTranslation(+5.0f, 3.5f, -10.0f + i * 5.0f);
+
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].world, right_cylinder_world);
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].tex_transform, brick_tex_transform);
+        render_ctx->all_ritems.ritems[_curr].obj_cbuffer_index = obj_cb_index++;
+        render_ctx->all_ritems.ritems[_curr].geometry = &render_ctx->geom[GEOM_SHAPES];
+        render_ctx->all_ritems.ritems[_curr].mat = &render_ctx->materials[MAT_BRICK];
+        render_ctx->all_ritems.ritems[_curr].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        render_ctx->all_ritems.ritems[_curr].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].index_count;
+        render_ctx->all_ritems.ritems[_curr].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].start_index_location;
+        render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].base_vertex_location;
+        render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
+        _curr++;
+
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].world, left_cylinder_world);
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].tex_transform, brick_tex_transform);
+        render_ctx->all_ritems.ritems[_curr].obj_cbuffer_index = obj_cb_index++;
+        render_ctx->all_ritems.ritems[_curr].geometry = &render_ctx->geom[GEOM_SHAPES];
+        render_ctx->all_ritems.ritems[_curr].mat = &render_ctx->materials[MAT_BRICK];
+        render_ctx->all_ritems.ritems[_curr].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        render_ctx->all_ritems.ritems[_curr].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].index_count;
+        render_ctx->all_ritems.ritems[_curr].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].start_index_location;
+        render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].base_vertex_location;
+        render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
+        _curr++;
+
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].world, left_sphere_world);
+        render_ctx->all_ritems.ritems[_curr].tex_transform = Identity4x4();
+        render_ctx->all_ritems.ritems[_curr].obj_cbuffer_index = obj_cb_index++;
+        render_ctx->all_ritems.ritems[_curr].geometry = &render_ctx->geom[GEOM_SHAPES];
+        render_ctx->all_ritems.ritems[_curr].mat = &render_ctx->materials[MAT_MIRROR];
+        render_ctx->all_ritems.ritems[_curr].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        render_ctx->all_ritems.ritems[_curr].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].index_count;
+        render_ctx->all_ritems.ritems[_curr].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].start_index_location;
+        render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
+        render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
+        _curr++;
+
+        XMStoreFloat4x4(&render_ctx->all_ritems.ritems[_curr].world, right_sphere_world);
+        render_ctx->all_ritems.ritems[_curr].tex_transform = Identity4x4();
+        render_ctx->all_ritems.ritems[_curr].obj_cbuffer_index = obj_cb_index++;
+        render_ctx->all_ritems.ritems[_curr].geometry = &render_ctx->geom[GEOM_SHAPES];
+        render_ctx->all_ritems.ritems[_curr].mat = &render_ctx->materials[MAT_MIRROR];
+        render_ctx->all_ritems.ritems[_curr].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        render_ctx->all_ritems.ritems[_curr].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].index_count;
+        render_ctx->all_ritems.ritems[_curr].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].start_index_location;
+        render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
+        render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
+        _curr++;
+    }
+    _ASSERT_EXPR(_curr == _COUNT_RENDERITEM, _T("Invalid render items creation"));
 }
 static void
 draw_render_items (
@@ -858,6 +1170,27 @@ create_pso (D3DRenderContext * render_ctx) {
     opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
+
+    //
+    // -- PSO for sky
+    //
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC sky_pso = opaque_pso_desc;
+
+    // -- camera is inside the sky sphere so just turn of culling
+    sky_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+
+    // -- use LESS_EQUAL compare function to avoid depth test fail at z = 1 (NDC)
+    // -- when depth buffer cleared to 1
+    sky_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+    sky_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_SKY_VS]->GetBufferPointer();
+    sky_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_SKY_VS]->GetBufferSize();
+    sky_pso.PS.pShaderBytecode = render_ctx->shaders[SHADER_SKY_PS]->GetBufferPointer();
+    sky_pso.PS.BytecodeLength = render_ctx->shaders[SHADER_SKY_PS]->GetBufferSize();
+
+    render_ctx->device->CreateGraphicsPipelineState(&sky_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_SKY]));
+
+    /*
     //
     // -- Create PSO for Highlight obj(s)
     //
@@ -865,7 +1198,7 @@ create_pso (D3DRenderContext * render_ctx) {
 
     // Change the depth test from < to <= so that if we draw the same triangle twice, it will
     // still pass the depth test.  This is needed because we redraw the picked triangle with a
-    // different material to highlight it.  If we do not use <=, the triangle will fail the 
+    // different material to highlight it.  If we do not use <=, the triangle will fail the
     // depth test the 2nd time we try and draw it.
     highlight_pso_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
@@ -883,6 +1216,7 @@ create_pso (D3DRenderContext * render_ctx) {
 
     highlight_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
     render_ctx->device->CreateGraphicsPipelineState(&highlight_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_HIGHLIGHT]));
+    */
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -916,100 +1250,6 @@ handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
     scene_ctx->mouse.y = y;
 }
 static void
-ray_pick (int sx, int sy, int ritems_count, RenderItem ritems []) {
-    XMFLOAT4X4 proj = Camera_GetProj4x4f(global_camera);
-
-    // -- compute (vx, vy, 1) on picking ray in view space
-    float vx = (+2.0f * sx / global_scene_ctx.width - 1.0f) / proj(0, 0);
-    float vy = (-2.0f * sy / global_scene_ctx.height + 1.0f) / proj(1, 1);
-
-    // -- define ray on viw space
-    XMVECTOR ray_origin = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-    XMVECTOR ray_dir = XMVectorSet(vx, vy, 1.0f, 0.0f);
-
-    XMMATRIX view = Camera_GetView(global_camera);
-    XMVECTOR det_view = XMMatrixDeterminant(view);
-    XMMATRIX inv_view = XMMatrixInverse(&det_view, view);
-
-    // -- assume no obj is picked to start
-    global_picked_ritem->visible = false;
-
-    // -- check if we picked an opague render item
-    // NOTE(omid): A real app might keep a separate "picking list" of objects that can be selected 
-    for (int i = 0; i < ritems_count; ++i) {
-        MeshGeometry * geo = ritems[i].geometry;
-
-        // -- skip invisible targets
-        if (false == ritems[i].visible)
-            continue;
-
-        XMMATRIX world = XMLoadFloat4x4(&ritems[i].world);
-        XMVECTOR det_world = XMMatrixDeterminant(world);
-        XMMATRIX inv_world = XMMatrixInverse(&det_world, world);
-
-        // -- compute matrix for transforming to local space of mesh (concat inv_view + inv_world)
-        XMMATRIX to_local = XMMatrixMultiply(inv_view, inv_world);
-
-        // -- transform ray to local space
-        ray_origin = XMVector3TransformCoord(ray_origin, to_local);
-        ray_dir = XMVector3TransformNormal(ray_dir, to_local);
-
-        // -- normalize ray dir (for intersection tests)
-        ray_dir = XMVector3Normalize(ray_dir);
-
-        /*
-            If we hit the bounding box of the mesh, then we might have picked a mesh triangle,
-            so do the ray/triangle tests.
-
-            If we did not hit the bounding box, then it is impossible that we hit
-            the mesh, so do not waste effort doing ray/triangle tests.
-        */
-        float tmin = 0.0f;
-        if (ritems[i].bounds.Intersects(ray_origin, ray_dir, tmin)) {
-            // NOTE(omid): for this demo we no what to cast to 
-            // but for real apps might need some metadata for book-keeping formats
-            Vertex * vertices = (Vertex *)geo->vb_cpu->GetBufferPointer();
-            uint32_t * indices = (uint32_t *)geo->ib_cpu->GetBufferPointer();
-            UINT tri_count = ritems[i].index_count / 3;
-
-            // -- find nearest ray/triangle intersection
-            tmin = FLT_MAX;
-            for (UINT j = 0; j < tri_count; ++j) {
-                // indices for this triangle
-                UINT i0 = indices[j * 3 + 0];
-                UINT i1 = indices[j * 3 + 1];
-                UINT i2 = indices[j * 3 + 2];
-
-                // vertices for this triangle
-                XMVECTOR v0 = XMLoadFloat3(&vertices[i0].position);
-                XMVECTOR v1 = XMLoadFloat3(&vertices[i1].position);
-                XMVECTOR v2 = XMLoadFloat3(&vertices[i2].position);
-
-                // -- iterate over all triagnles to find intersection
-                float t = 0.0f;
-                if (DirectX::TriangleTests::Intersects(ray_origin, ray_dir, v0, v1, v2, t)) {
-                    if (t < tmin) {
-                        tmin = t;
-                        UINT picked_triangle = j;
-
-                        global_picked_ritem->visible = true;
-                        global_picked_ritem->index_count = 3;
-                        global_picked_ritem->base_vertex_loc = 0;
-
-                        global_picked_ritem->world = ritems[i].world;
-                        global_picked_ritem->n_frames_dirty = NUM_QUEUING_FRAMES;
-
-                        // -- offset to the picked triangle in mesh index buffer
-                        global_picked_ritem->start_index_loc = 3 * picked_triangle;
-                    }
-                }
-            }
-        }
-    }
-
-
-}
-static void
 handle_mouse_down (
     SceneContext * scene_ctx,
     WPARAM wparam,
@@ -1022,8 +1262,7 @@ handle_mouse_down (
         scene_ctx->mouse.x = x;
         scene_ctx->mouse.y = y;
         SetCapture(hwnd);
-    } else if ((wparam & MK_RBUTTON) != 0)
-        ray_pick(x, y, ritems_count, ritems);
+    }
 }
 
 static void
@@ -1215,9 +1454,17 @@ draw_main (D3DRenderContext * render_ctx) {
     ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
     cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
 
+    // Bind the sky cube map.  For our demos, we just use one "world" cube map representing the environment
+    // from far away, so all objects will use the same cube map and we only need to set it once per-frame.  
+    // If we wanted to use "local" cube maps, we would have to change them per-object, or dynamically
+    // index into an array of cube maps.
+    D3D12_GPU_DESCRIPTOR_HANDLE sky_tex_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    sky_tex_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
+    cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
+
     // Bind all textures. We only specify the first descriptor in the table
     // Root sig knows how many descriptors we have in the table
-    cmdlist->SetGraphicsRootDescriptorTable(3, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
@@ -1227,16 +1474,14 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->opaque_ritems
     );
 
-    // 2. draw highlighted obj(s)
-    render_ctx->highlight_ritems.ritems[0] = *global_picked_ritem;
-    //cmdlist->SetPipelineState(render_ctx->psos[LAYER_HIGHLIGHT]);
+    // 2. draw sky
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_SKY]);
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
-        &render_ctx->highlight_ritems
+        &render_ctx->environment_ritems
     );
-
 
     // -- indicate that the backbuffer will now be used to present
     resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -1479,7 +1724,6 @@ d3d_resize (D3DRenderContext * render_ctx) {
     }
 
     Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
-    BoundingFrustum::CreateFromMatrix(global_cam_frustum, Camera_GetProj(global_camera));
 }
 
 static LRESULT CALLBACK
@@ -1600,8 +1844,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             &cam_pos, &cam_target, &cam_up
         );
     }
-
-    BoundingFrustum::CreateFromMatrix(global_cam_frustum, Camera_GetProj(global_camera));
 
     // ========================================================================================================
 #pragma region Windows_Setup
@@ -1861,7 +2103,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_car_geometry(render_ctx);
+    create_skull_geometry(render_ctx);
+    create_shapes_geometry(render_ctx);
     create_materials(render_ctx->materials);
     create_render_items(render_ctx);
 
@@ -1903,9 +2146,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         compile_shader(standard_shader_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
     }
     {   // sky shaders
-        compile_shader(standard_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_VS]);
+        compile_shader(sky_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_VS]);
 
-        compile_shader(standard_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_PS]);
+        compile_shader(sky_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_PS]);
     }
 #pragma endregion
 
