@@ -513,7 +513,7 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
     GeomVertex *    cylinder_vertices = reinterpret_cast<GeomVertex *>(scratch + ssz_id);
     uint16_t *      cylinder_indices = reinterpret_cast<uint16_t *>(scratch + csz);
 
-    create_box(1.5f, 0.5f, 1.5f, box_vertices, box_indices);
+    create_box(1.0f, 1.0f, 1.0f, box_vertices, box_indices);
     create_grid16(20.0f, 30.0f, 60, 40, grid_vertices, grid_indices);
     create_sphere(0.5f, sphere_vertices, sphere_indices);
     create_cylinder(0.5f, 0.3f, 3.0f, cylinder_vertices, cylinder_indices);
@@ -651,7 +651,6 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_SKY].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKY].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKY].initialized = true;
-    render_ctx->all_ritems.ritems[RITEM_SKY].visible = true;
     render_ctx->all_ritems.size++;
     render_ctx->environment_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKY];
     render_ctx->environment_ritems.size++;
@@ -668,6 +667,8 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
+    render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
 
     // skull
@@ -682,6 +683,8 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
+    render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
 
     // grid
@@ -696,6 +699,8 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_GRID].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_GRID_ID].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GRID].initialized = true;
+    render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GRID];
 
     // cylinders and spheres
@@ -720,6 +725,8 @@ create_render_items (D3DRenderContext * render_ctx) {
         render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].base_vertex_location;
         render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
         render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].initialized = true;
+        render_ctx->all_ritems.size++;
         render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
         _curr++;
 
@@ -734,6 +741,8 @@ create_render_items (D3DRenderContext * render_ctx) {
         render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID].base_vertex_location;
         render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
         render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].initialized = true;
+        render_ctx->all_ritems.size++;
         render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
         _curr++;
 
@@ -748,6 +757,8 @@ create_render_items (D3DRenderContext * render_ctx) {
         render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
         render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
         render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].initialized = true;
+        render_ctx->all_ritems.size++;
         render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
         _curr++;
 
@@ -762,6 +773,8 @@ create_render_items (D3DRenderContext * render_ctx) {
         render_ctx->all_ritems.ritems[_curr].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
         render_ctx->all_ritems.ritems[_curr].n_frames_dirty = NUM_QUEUING_FRAMES;
         render_ctx->all_ritems.ritems[_curr].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+        render_ctx->all_ritems.ritems[_curr].initialized = true;
+        render_ctx->all_ritems.size++;
         render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[_curr];
         _curr++;
     }
@@ -776,7 +789,7 @@ draw_render_items (
 ) {
     size_t obj_cbuffer_size = sizeof(ObjectConstants);
     for (size_t i = 0; i < ritem_array->size; ++i) {
-        if (ritem_array->ritems[i].initialized && ritem_array->ritems[i].visible) {
+        if (ritem_array->ritems[i].initialized) {
             D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(ritem_array->ritems[i].geometry);
             D3D12_INDEX_BUFFER_VIEW ibv = Mesh_GetIndexBufferView(ritem_array->ritems[i].geometry);
             cmd_list->IASetVertexBuffers(0, 1, &vbv);
@@ -1271,10 +1284,7 @@ update_object_cbuffer (D3DRenderContext * render_ctx) {
     size_t obj_cbuffer_size = sizeof(ObjectConstants);
     uint8_t * obj_begin_ptr = render_ctx->frame_resources[frame_index].obj_ptr;
     for (unsigned i = 0; i < render_ctx->all_ritems.size; i++) {
-        if (
-            render_ctx->all_ritems.ritems[i].initialized &&
-            render_ctx->all_ritems.ritems[i].n_frames_dirty
-        ) {
+        if (render_ctx->all_ritems.ritems[i].n_frames_dirty > 0) {
             XMMATRIX world = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].world);
             XMMATRIX tex_transform = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].tex_transform);
             ObjectConstants data = {};
@@ -1285,6 +1295,9 @@ update_object_cbuffer (D3DRenderContext * render_ctx) {
 
             uint8_t * obj_ptr = obj_begin_ptr + (obj_cbuffer_size * render_ctx->all_ritems.ritems[i].obj_cbuffer_index);
             memcpy(obj_ptr, &data, obj_cbuffer_size);
+
+            // Next FrameResource need to be updated too.
+            render_ctx->all_ritems.ritems[i].n_frames_dirty--;
         }
     }
 }
@@ -1835,15 +1848,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     global_camera = (Camera *)malloc(cam_size);
     Camera_Init(global_camera);
     Camera_SetPosition(global_camera, 0.0f, 2.0f, -15.0f);
-    {
-        XMFLOAT3 cam_pos = XMFLOAT3(5.0f, 4.0f, -15.0f);
-        XMFLOAT3 cam_target = XMFLOAT3(0.0f, 1.0f, 0.0f);
-        XMFLOAT3 cam_up = XMFLOAT3(0.0f, 1.0f, 0.0f);
-        Camera_LookAt(
-            global_camera,
-            &cam_pos, &cam_target, &cam_up
-        );
-    }
 
     // ========================================================================================================
 #pragma region Windows_Setup
