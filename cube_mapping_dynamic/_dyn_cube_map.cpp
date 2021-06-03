@@ -1,11 +1,9 @@
 /* ===========================================================
-   #File: env_mapping_and_reflection_modeling.cpp #
-   #Date: 02 June 2021 #
+   #File: _dyn_cube_map.cpp #
+   #Date: 03 June 2021 #
    #Revision: 1.0 #
    #Creator: Omid Miresmaeili #
-   #Description: Using static cube/environmental maps #
-   # to create a skybox and modeling specular reflections of #
-   # light coming from surrounding objects #
+   #Description: Dynamic cube map aka building the cube map at runtime #
    #Notice: (C) Copyright 2021 by Omid. All Rights Reserved. #
    =========================================================== */
 
@@ -1921,7 +1919,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     HWND hwnd = CreateWindowEx(
         0,                                              // Optional window styles.
         wc.lpszClassName,                               // Window class
-        _T("Staic Environmental Map"),                  // Window title
+        _T("Dynamic Cube Map"),                         // Window title
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,               // Window style
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,    // Size and position settings
         0 /* Parent window */, 0 /* Menu */, hInstance  /* Instance handle */,
@@ -2476,4 +2474,3 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     return 0;
 }
-
