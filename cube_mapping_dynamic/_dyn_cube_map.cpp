@@ -68,9 +68,10 @@ enum ALL_RENDERITEMS {
     RITEM_SKY = 1,
     RITEM_BOX = 2,
     RITEM_GRID = 3,
+    RITEM_GLOBE = 4,
 
     // NOTE(omid): following indices are meaningless. DON'T use them! 
-    RITEM_CYLENDER0 = 4,
+    RITEM_CYLENDER0 = 5,
     RITEM_CYLENDER1,
     RITEM_CYLENDER2,
     RITEM_CYLENDER3,
@@ -80,7 +81,7 @@ enum ALL_RENDERITEMS {
     RITEM_CYLENDER7,
     RITEM_CYLENDER8,
     RITEM_CYLENDER9,
-    RITEM_SPHERE0 = 14,
+    RITEM_SPHERE0 = 15,
     RITEM_SPHERE1,
     RITEM_SPHERE2,
     RITEM_SPHERE3,
@@ -93,7 +94,7 @@ enum ALL_RENDERITEMS {
 
     _COUNT_RENDERITEM
 };
-static_assert(24 == _COUNT_RENDERITEM, _T("invalid render items count"));
+static_assert(25 == _COUNT_RENDERITEM, _T("invalid render items count"));
 enum SHADERS_CODE {
     SHADER_STANDARD_VS = 0,
     SHADER_OPAQUE_PS = 1,
@@ -220,6 +221,7 @@ struct D3DRenderContext {
     RenderItemArray                 all_ritems;
     // Render items divided by PSO.
     RenderItemArray                 opaque_ritems;
+    RenderItemArray                 opaque_dyn_reflector_ritems;
     RenderItemArray                 environment_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
@@ -495,10 +497,7 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     free(vertices);
     free(indices);
 }
-static void
-animate_skull (RenderItem * skull) {
-    ...
-}
+
 #define _BOX_VTX_CNT   24
 #define _BOX_IDX_CNT   36
 
@@ -667,7 +666,6 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
 }
 static void
 create_render_items (D3DRenderContext * render_ctx) {
-...globe
     // sky
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKY].world, XMMatrixScaling(5000.0f, 5000.0f, 5000.0f));
     render_ctx->all_ritems.ritems[RITEM_SKY].tex_transform = Identity4x4();
@@ -686,26 +684,10 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->environment_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKY];
     render_ctx->environment_ritems.size++;
 
-    // box
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 1;
-    render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
-    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
-    render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].index_count;
-    render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
-    render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
-
     // skull
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
+    render_ctx->all_ritems.ritems[RITEM_SKULL].world = Identity4x4();
     render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 1;
     render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
     render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_SKULL];
     render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -717,6 +699,22 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
+
+    // box
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
+    render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
 
     // grid
     render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
@@ -734,10 +732,26 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GRID];
 
+    // globe
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].world, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 2.0f, 0.0f));
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 4;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].mat = &render_ctx->materials[MAT_MIRROR];
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->opaque_dyn_reflector_ritems.ritems[render_ctx->opaque_dyn_reflector_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GLOBE];
+
     // cylinders and spheres
     XMMATRIX brick_tex_transform = XMMatrixScaling(1.0f, 1.0f, 1.0f);
-    UINT obj_cb_index = 4;
-    int _curr = 4;
+    UINT obj_cb_index = 5;
+    int _curr = 5;
     for (int i = 0; i < 5; ++i) {
         XMMATRIX left_cylinder_world = XMMatrixTranslation(-5.0f, 1.5f, -10.0f + i * 5.0f);
         XMMATRIX right_cylinder_world = XMMatrixTranslation(+5.0f, 1.5f, -10.0f + i * 5.0f);
@@ -1434,9 +1448,7 @@ handle_mouse_down (
     SceneContext * scene_ctx,
     WPARAM wparam,
     int x, int y,
-    HWND hwnd,
-    int ritems_count,
-    RenderItem ritems []
+    HWND hwnd
 ) {
     if ((wparam & MK_LBUTTON) != 0) {
         scene_ctx->mouse.x = x;
@@ -1533,6 +1545,37 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
 }
 static void
+update_cubemap_face_pass_cbuffers (D3DRenderContext * render_ctx) {
+    size_t pass_cb_size = sizeof(PassConstants);
+    for (int i = 0; i < 6; ++i) {
+        PassConstants cubeface_pass_cb = render_ctx->main_pass_constants;
+
+        XMMATRIX view = Camera_GetView(render_ctx->cubemap_cameras[i]);
+        XMVECTOR view_det = XMMatrixDeterminant(view);
+        XMMATRIX proj = Camera_GetProj(render_ctx->cubemap_cameras[i]);
+        XMVECTOR proj_det = XMMatrixDeterminant(proj);
+        XMMATRIX view_proj = XMMatrixMultiply(view, proj);
+        XMMATRIX inv_view = XMMatrixInverse(&view_det, view);
+        XMMATRIX inv_proj = XMMatrixInverse(&proj_det, proj);
+        XMMATRIX inv_view_proj = XMMatrixInverse(&XMMatrixDeterminant(view_proj), view_proj);
+
+        XMStoreFloat4x4(&cubeface_pass_cb.view, XMMatrixTranspose(view));
+        XMStoreFloat4x4(&cubeface_pass_cb.inv_view, XMMatrixTranspose(inv_view));
+        XMStoreFloat4x4(&cubeface_pass_cb.proj, XMMatrixTranspose(proj));
+        XMStoreFloat4x4(&cubeface_pass_cb.inv_proj, XMMatrixTranspose(inv_proj));
+        XMStoreFloat4x4(&cubeface_pass_cb.view_proj, XMMatrixTranspose(view_proj));
+        XMStoreFloat4x4(&cubeface_pass_cb.inv_view_proj, XMMatrixTranspose(inv_view_proj));
+        cubeface_pass_cb.eye_posw = Camera_GetPosition3f(render_ctx->cubemap_cameras[i]);
+        cubeface_pass_cb.render_target_size = XMFLOAT2((float)render_ctx->cubemap_size, (float)render_ctx->cubemap_size);
+        cubeface_pass_cb.inv_render_target_size = XMFLOAT2(1.0f / render_ctx->cubemap_size, 1.0f / render_ctx->cubemap_size);
+
+        // Cube map pass cbuffers are stored in elements 1-6.
+        uint8_t * pass_ptr = 
+            render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr + (i + 1) * pass_cb_size;
+        memcpy(pass_ptr, &cubeface_pass_cb, sizeof(PassConstants));
+    }
+}
+static void
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
 
     // Cycle through the circular frame resource array.
@@ -1582,6 +1625,7 @@ flush_command_queue (D3DRenderContext * render_ctx) {
 }
 static HRESULT
 draw_main (D3DRenderContext * render_ctx) {
+    ...
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1955,9 +1999,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             &global_scene_ctx,
             wParam,
             GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
-            hwnd,
-            _render_ctx->opaque_ritems.size,
-            _render_ctx->opaque_ritems.ritems
+            hwnd
         );
     } break;
     case WM_LBUTTONUP:
@@ -2354,7 +2396,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].material_ptr, &render_ctx->frame_resources[i].material_sbuffer);
 
-        create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
+        // 1 main pass + 6 passes for dyn cubemap faces
+        create_upload_buffer(render_ctx->device, pass_cb_size * 7, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
     }
 #pragma endregion
 
@@ -2510,15 +2553,26 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             }
 #pragma endregion
             Timer_Tick(&global_timer);
-
             if (!global_paused) {
-                animate_skull();
+                //
+                // animate the skull around the center sphere
+                float total_time = Timer_GetTotalTime(&global_timer);
+                XMMATRIX skull_scale = XMMatrixScaling(0.2f, 0.2f, 0.2f);
+                XMMATRIX skull_offset = XMMatrixTranslation(3.0f, 2.0f, 0.0f);
+                XMMATRIX skull_local_rotate = XMMatrixRotationY(2.0f * total_time);
+                XMMATRIX skull_global_rotate = XMMatrixRotationY(0.5f * total_time);
+                XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, skull_scale * skull_local_rotate * skull_offset * skull_global_rotate);
+                render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+                render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKULL];
+
                 move_to_next_frame(render_ctx, &render_ctx->frame_index);
 
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
                 update_mat_buffer(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
                 update_object_cbuffer(render_ctx);
+
+                update_cubemap_face_pass_cbuffers(render_ctx);
 
                 draw_main(render_ctx);
 
