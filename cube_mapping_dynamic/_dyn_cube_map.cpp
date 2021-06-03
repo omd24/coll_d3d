@@ -31,6 +31,8 @@
 
 #include "camera.h"
 
+#include "cube_render_target.h"
+
 #define ENABLE_DEARIMGUI
 
 #if !defined(NDEBUG) && !defined(_DEBUG)

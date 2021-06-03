@@ -156,10 +156,12 @@
     <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="camera.cpp" />
+    <ClCompile Include="cube_render_target.cpp" />
     <ClCompile Include="_dyn_cube_map.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="camera.h" />
+    <ClInclude Include="cube_render_target.h" />
     <ClInclude Include="headers\common.h" />
     <ClInclude Include="headers\dds_loader.h" />
     <ClInclude Include="headers\game_timer.h" />
