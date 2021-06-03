@@ -59,7 +59,6 @@ bool global_imgui_enabled = false;
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_SKY = 1,
-    LAYER_OPAQUE_DYNAMIC_REFLECTOR = 2,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -954,10 +953,8 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
 
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cube_rtvs[6];
-    for (int i = 0; i < 6; ++i) {
-        hcpu_rtv.ptr += (NUM_BACKBUFFERS + i) * render_ctx->rtv_descriptor_size;
-        hcpu_cube_rtvs[i] = hcpu_rtv;
-    }
+    for (int i = 0; i < 6; ++i)
+        hcpu_cube_rtvs[i].ptr = hcpu_rtv.ptr + (NUM_BACKBUFFERS + i) * render_ctx->rtv_descriptor_size;
     CubeRenderTarget_CreateDescriptors(
         &render_ctx->dynamic_cubemap,
         hcpu_cube_srv, hgpu_cube_srv, hcpu_cube_rtvs
@@ -1052,8 +1049,65 @@ create_cube_depth_stencil (D3DRenderContext * render_ctx) {
     );
 }
 static void
-draw_scene_to_cubemap () {
-    ...
+draw_scene_to_cubemap (D3DRenderContext * render_ctx) {
+    FrameResource frame_resource = render_ctx->frame_resources[render_ctx->frame_index];
+    ID3D12Resource * cubemap_tex = render_ctx->dynamic_cubemap.cupemap;
+    ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
+
+    cmdlist->RSSetViewports(1, &render_ctx->dynamic_cubemap.viewport);
+    cmdlist->RSSetScissorRects(1, &render_ctx->dynamic_cubemap.scissor_rect);
+
+    // change to render target
+    resource_usage_transition(
+        cmdlist,
+        cubemap_tex,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_RENDER_TARGET
+    );
+
+    UINT pass_cb_size = sizeof(PassConstants);
+    // For each cube map face.
+    for (int i = 0; i < 6; ++i) {
+        D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = CubeRenderTarget_GetRtv(&render_ctx->dynamic_cubemap, i);
+
+        // Clear the back buffer and depth buffer.
+        cmdlist->ClearRenderTargetView(hcpu_rtv, Colors::LightSteelBlue, 0, nullptr);
+        cmdlist->ClearDepthStencilView(render_ctx->cube_dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+        // Specify the buffers we are going to render to.
+        cmdlist->OMSetRenderTargets(1, &hcpu_rtv, true, &render_ctx->cube_dsv);
+
+        // Bind the pass constant buffer for this cube map face so we use 
+        // the right view/proj matrix for this cube face.
+        D3D12_GPU_VIRTUAL_ADDRESS pass_cb_address =
+            frame_resource.pass_cb->GetGPUVirtualAddress() + (i + 1) * pass_cb_size;
+        cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb_address);
+
+        draw_render_items(
+        cmdlist,
+        frame_resource.obj_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        &render_ctx->opaque_ritems
+        );
+
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_SKY]);
+        draw_render_items(
+            cmdlist,
+            frame_resource.obj_cb,
+            render_ctx->cbv_srv_uav_descriptor_size,
+            &render_ctx->environment_ritems
+        );
+
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    }
+
+    // change back to GENERIC_READ so we can read the texture in a shader.
+    resource_usage_transition(
+        cmdlist,
+        cubemap_tex,
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_GENERIC_READ
+    );
 }
 static void
 get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
@@ -1557,7 +1611,8 @@ update_cubemap_face_pass_cbuffers (D3DRenderContext * render_ctx) {
         XMMATRIX view_proj = XMMatrixMultiply(view, proj);
         XMMATRIX inv_view = XMMatrixInverse(&view_det, view);
         XMMATRIX inv_proj = XMMatrixInverse(&proj_det, proj);
-        XMMATRIX inv_view_proj = XMMatrixInverse(&XMMatrixDeterminant(view_proj), view_proj);
+        XMVECTOR view_proj_det = XMMatrixDeterminant(view_proj);
+        XMMATRIX inv_view_proj = XMMatrixInverse(&view_proj_det, view_proj);
 
         XMStoreFloat4x4(&cubeface_pass_cb.view, XMMatrixTranspose(view));
         XMStoreFloat4x4(&cubeface_pass_cb.inv_view, XMMatrixTranspose(inv_view));
@@ -1570,7 +1625,7 @@ update_cubemap_face_pass_cbuffers (D3DRenderContext * render_ctx) {
         cubeface_pass_cb.inv_render_target_size = XMFLOAT2(1.0f / render_ctx->cubemap_size, 1.0f / render_ctx->cubemap_size);
 
         // Cube map pass cbuffers are stored in elements 1-6.
-        uint8_t * pass_ptr = 
+        uint8_t * pass_ptr =
             render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr + (i + 1) * pass_cb_size;
         memcpy(pass_ptr, &cubeface_pass_cb, sizeof(PassConstants));
     }
@@ -1625,7 +1680,6 @@ flush_command_queue (D3DRenderContext * render_ctx) {
 }
 static HRESULT
 draw_main (D3DRenderContext * render_ctx) {
-    ...
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1645,7 +1699,25 @@ draw_main (D3DRenderContext * render_ctx) {
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
+
+    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
+    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
+    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
+
+    // Bind the sky cube map.  For our demos, we just use one "world" cube map representing the environment
+    // from far away, so all objects will use the same cube map and we only need to set it once per-frame.  
+    // If we wanted to use "local" cube maps, we would have to change them per-object, or dynamically
+    // index into an array of cube maps.
+    D3D12_GPU_DESCRIPTOR_HANDLE sky_tex_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    sky_tex_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
+    cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
+
+    // Bind all textures. We only specify the first descriptor in the table
+    // Root sig knows how many descriptors we have in the table
+    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+
+    draw_scene_to_cubemap(render_ctx);
 
     // -- set viewport and scissor
     cmdlist->RSSetViewports(1, &render_ctx->viewport);
@@ -1668,29 +1740,27 @@ draw_main (D3DRenderContext * render_ctx) {
     cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
     cmdlist->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
 
-    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
-
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb->GetGPUVirtualAddress());
 
-    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
-    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
-    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
+    // -- use dynamic cubemap for the dynamic reflectors layer
+    D3D12_GPU_DESCRIPTOR_HANDLE srv_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    srv_handle.ptr += render_ctx->dyn_tex_heap_index * render_ctx->cbv_srv_uav_descriptor_size;
+    cmdlist->SetGraphicsRootDescriptorTable(3, srv_handle);
 
-    // Bind the sky cube map.  For our demos, we just use one "world" cube map representing the environment
-    // from far away, so all objects will use the same cube map and we only need to set it once per-frame.  
-    // If we wanted to use "local" cube maps, we would have to change them per-object, or dynamically
-    // index into an array of cube maps.
-    D3D12_GPU_DESCRIPTOR_HANDLE sky_tex_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    sky_tex_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
+    // 1. draw opaque reflector objs first
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        &render_ctx->opaque_dyn_reflector_ritems
+    );
+
+    // Use the static "background" cube map for the other objects (including the sky)
     cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
 
-    // Bind all textures. We only specify the first descriptor in the table
-    // Root sig knows how many descriptors we have in the table
-    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
-
-    // 1. draw opaque objs first (opaque pso is currently used)
+    // 2. draw opaque objs
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
@@ -1698,7 +1768,7 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->opaque_ritems
     );
 
-    // 2. draw sky
+    // 3. draw sky
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_SKY]);
     draw_render_items(
         cmdlist,
