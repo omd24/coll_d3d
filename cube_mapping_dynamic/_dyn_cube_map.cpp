@@ -59,6 +59,7 @@ bool global_imgui_enabled = false;
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_SKY = 1,
+    LAYER_OPAQUE_DYNAMIC_REFLECTOR = 2,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -183,7 +184,6 @@ struct D3DRenderContext {
     // Pipeline stuff
     D3D12_VIEWPORT                  viewport;
     D3D12_RECT                      scissor_rect;
-    //IDXGISwapChain3 *               swapchain3;
     IDXGISwapChain *                swapchain;
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
@@ -196,11 +196,21 @@ struct D3DRenderContext {
 
     UINT                            rtv_descriptor_size;
     UINT                            cbv_srv_uav_descriptor_size;
+    UINT                            dsv_descriptor_size;
 
     ID3D12DescriptorHeap *          rtv_heap;
     ID3D12DescriptorHeap *          dsv_heap;
     ID3D12DescriptorHeap *          srv_heap;
 
+    // Dynamic Cubemap stuff
+    CubeRenderTarget                dynamic_cubemap;
+    D3D12_CPU_DESCRIPTOR_HANDLE     cube_dsv;
+    ID3D12Resource *                cube_depth_stencil_buffer;
+    Camera *                        cubemap_cameras[6];
+    UINT                            cubemap_size;
+    UINT                            dyn_tex_heap_index;
+
+    // Static environment map index on descriptors heap
     UINT                            sky_tex_heap_index;
 
     PassConstants                   main_pass_constants;
@@ -485,6 +495,10 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
     free(vertices);
     free(indices);
 }
+static void
+animate_skull (RenderItem * skull) {
+    ...
+}
 #define _BOX_VTX_CNT   24
 #define _BOX_IDX_CNT   36
 
@@ -653,6 +667,7 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
 }
 static void
 create_render_items (D3DRenderContext * render_ctx) {
+...globe
     // sky
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKY].world, XMMatrixScaling(5000.0f, 5000.0f, 5000.0f));
     render_ctx->all_ritems.ritems[RITEM_SKY].tex_transform = Identity4x4();
@@ -830,7 +845,8 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX + 1 /* DearImGui*/;
+    srv_heap_desc.NumDescriptors =
+        _COUNT_TEX + 1 /* CubeRenderTarget descriptor */ + 1 /* DearImGui*/;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -899,19 +915,131 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     //
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
-    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS;
+    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS + 6 /* cubemap render-targets */;
     rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
 
     // Create Depth Stencil View Descriptor Heap
+    // NOTE(omid): one additional dsv is enough for 6 cubemap rendertargets 
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc;
-    dsv_heap_desc.NumDescriptors = 1;
+    dsv_heap_desc.NumDescriptors = 1 + 1 /* cubemap render-targets */;
     dsv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     dsv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     dsv_heap_desc.NodeMask = 0;
     render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
 
+    //
+    // cube render-target descriptors
+    render_ctx->dyn_tex_heap_index = 7;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cube_srv = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_cube_srv.ptr += render_ctx->dyn_tex_heap_index * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_cube_srv = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    hgpu_cube_srv.ptr += render_ctx->dyn_tex_heap_index * render_ctx->cbv_srv_uav_descriptor_size;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cube_rtvs[6];
+    for (int i = 0; i < 6; ++i) {
+        hcpu_rtv.ptr += (NUM_BACKBUFFERS + i) * render_ctx->rtv_descriptor_size;
+        hcpu_cube_rtvs[i] = hcpu_rtv;
+    }
+    CubeRenderTarget_CreateDescriptors(
+        &render_ctx->dynamic_cubemap,
+        hcpu_cube_srv, hgpu_cube_srv, hcpu_cube_rtvs
+    );
+
+    //
+    // cube dsv
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_dsv = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_dsv.ptr += (1 * render_ctx->dsv_descriptor_size);
+    render_ctx->cube_dsv = hcpu_dsv;
+}
+static void
+create_cube_face_cameras (Camera * cams [], float x, float y, float z) {
+    // Generate the cube map about the given position.
+    XMFLOAT3 center(x, y, z);
+    XMFLOAT3 world_up(0.0f, 1.0f, 0.0f);
+
+    // Look along each coordinate axis.
+    XMFLOAT3 targets[6] =
+    {
+        XMFLOAT3(x + 1.0f, y, z), // +X
+        XMFLOAT3(x - 1.0f, y, z), // -X
+        XMFLOAT3(x, y + 1.0f, z), // +Y
+        XMFLOAT3(x, y - 1.0f, z), // -Y
+        XMFLOAT3(x, y, z + 1.0f), // +Z
+        XMFLOAT3(x, y, z - 1.0f)  // -Z
+    };
+
+    // Use world up vector (0,1,0) for all directions except +Y/-Y.  In these cases, we
+    // are looking down +Y or -Y, so we need a different "up" vector.
+    XMFLOAT3 ups[6] =
+    {
+        XMFLOAT3(0.0f, 1.0f, 0.0f),  // +X
+        XMFLOAT3(0.0f, 1.0f, 0.0f),  // -X
+        XMFLOAT3(0.0f, 0.0f, -1.0f), // +Y
+        XMFLOAT3(0.0f, 0.0f, +1.0f), // -Y
+        XMFLOAT3(0.0f, 1.0f, 0.0f),	 // +Z
+        XMFLOAT3(0.0f, 1.0f, 0.0f)	 // -Z
+    };
+
+    for (int i = 0; i < 6; ++i) {
+        Camera_LookAt(cams[i], &center, &targets[i], &ups[i]);
+        Camera_SetLens(cams[i], 0.5f * XM_PI, 1.0f, 0.1f, 1000.0f);
+        Camera_UpdateViewMatrix(cams[i]);
+    }
+}
+static void
+create_cube_depth_stencil (D3DRenderContext * render_ctx) {
+    // Create the depth/stencil buffer and view.
+    D3D12_RESOURCE_DESC depth_stencil_desc;
+    depth_stencil_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depth_stencil_desc.Alignment = 0;
+    depth_stencil_desc.Width = render_ctx->cubemap_size;
+    depth_stencil_desc.Height = render_ctx->cubemap_size;
+    depth_stencil_desc.DepthOrArraySize = 1;
+    depth_stencil_desc.MipLevels = 1;
+    depth_stencil_desc.Format = render_ctx->depthstencil_format;
+    depth_stencil_desc.SampleDesc.Count = 1;
+    depth_stencil_desc.SampleDesc.Quality = 0;
+    depth_stencil_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depth_stencil_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE opt_clear;
+    opt_clear.Format = render_ctx->depthstencil_format;
+    opt_clear.DepthStencil.Depth = 1.0f;
+    opt_clear.DepthStencil.Stencil = 0;
+
+    D3D12_HEAP_PROPERTIES ds_heap_props = {};
+    ds_heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
+    ds_heap_props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    ds_heap_props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    ds_heap_props.CreationNodeMask = 1;
+    ds_heap_props.VisibleNodeMask = 1;
+
+    render_ctx->device->CreateCommittedResource(
+        &ds_heap_props,
+        D3D12_HEAP_FLAG_NONE,
+        &depth_stencil_desc,
+        D3D12_RESOURCE_STATE_COMMON,
+        &opt_clear,
+        IID_PPV_ARGS(&render_ctx->cube_depth_stencil_buffer)
+    );
+
+    // Create descriptor to mip level 0 of entire resource using the format of the resource.
+    render_ctx->device->CreateDepthStencilView(render_ctx->cube_depth_stencil_buffer, nullptr, render_ctx->cube_dsv);
+
+    // Transition the resource from its initial state to be used as a depth buffer.
+    resource_usage_transition(
+        render_ctx->direct_cmd_list, render_ctx->cube_depth_stencil_buffer,
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE
+    );
+}
+static void
+draw_scene_to_cubemap () {
+    ...
 }
 static void
 get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
@@ -1981,6 +2109,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // store RTV descriptor increment size
     render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    // store DSV descriptor increment size
+    render_ctx->dsv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
     // Check 4X MSAA quality support for our back buffer format.
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS quality_levels;
     quality_levels.Format = render_ctx->backbuffer_format;
@@ -2115,7 +2246,27 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion
 
+    // Dynamic Cubemap setup
+    CubeRenderTarget_Init(
+        &render_ctx->dynamic_cubemap,
+        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
+        render_ctx->backbuffer_format,
+        (float *)&render_ctx->main_pass_constants.fog_color
+    );
+    render_ctx->cubemap_size = 512;
+    // -- initialize cubemap cameras
+    _ASSERT_EXPR(cam_size > 0, _T("invalid camera byte size"));
+    for (int i = 0; i < 6; ++i) {
+        render_ctx->cubemap_cameras[i] = (Camera *)malloc(cam_size);
+        Camera_Init(render_ctx->cubemap_cameras[i]);
+    }
+    create_cube_face_cameras(render_ctx->cubemap_cameras, 0.0f, 2.0f, 0.0f);
+
+
     create_descriptor_heaps(render_ctx);
+
+
+    create_cube_depth_stencil(render_ctx);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2281,13 +2432,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
         imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            0     /* no other additional descriptor for now */
+            1 /* CubeRenderTarget descriptor */
             ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
         imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            0     /* no other additional descriptor for now */
+            1 /* CubeRenderTarget descriptor */
             ));
 
             // Setup Platform/Renderer backends
@@ -2361,6 +2512,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             Timer_Tick(&global_timer);
 
             if (!global_paused) {
+                animate_skull();
                 move_to_next_frame(render_ctx, &render_ctx->frame_index);
 
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
@@ -2417,6 +2569,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->shaders[i]->Release();
 
     render_ctx->root_signature->Release();
+
+    // dynamic cube map deinit
+    for (int i = 0; i < 6; ++i)
+        ::free(render_ctx->cubemap_cameras[i]);
+    CubeRenderTarget_Deinit(&render_ctx->dynamic_cubemap);
 
     // release swapchain backbuffers resources
     for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i)
