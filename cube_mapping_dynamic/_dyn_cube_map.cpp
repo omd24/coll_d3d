@@ -2707,6 +2707,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     render_ctx->rtv_heap->Release();
     render_ctx->srv_heap->Release();
 
+    render_ctx->cube_depth_stencil_buffer->Release();
     render_ctx->depth_stencil_buffer->Release();
 
     for (unsigned i = 0; i < (_COUNT_TEX); i++) {
