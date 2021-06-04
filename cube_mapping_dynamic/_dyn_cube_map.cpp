@@ -1051,7 +1051,7 @@ create_cube_depth_stencil (D3DRenderContext * render_ctx) {
 static void
 draw_scene_to_cubemap (D3DRenderContext * render_ctx) {
     FrameResource frame_resource = render_ctx->frame_resources[render_ctx->frame_index];
-    ID3D12Resource * cubemap_tex = render_ctx->dynamic_cubemap.cupemap;
+    ID3D12Resource * cubemap_tex = render_ctx->dynamic_cubemap.cubemap;
     ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
 
     cmdlist->RSSetViewports(1, &render_ctx->dynamic_cubemap.viewport);
@@ -1071,7 +1071,7 @@ draw_scene_to_cubemap (D3DRenderContext * render_ctx) {
         D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = CubeRenderTarget_GetRtv(&render_ctx->dynamic_cubemap, i);
 
         // Clear the back buffer and depth buffer.
-        cmdlist->ClearRenderTargetView(hcpu_rtv, Colors::LightSteelBlue, 0, nullptr);
+        cmdlist->ClearRenderTargetView(hcpu_rtv, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
         cmdlist->ClearDepthStencilView(render_ctx->cube_dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
         // Specify the buffers we are going to render to.
@@ -2359,13 +2359,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
     // Dynamic Cubemap setup
+    render_ctx->cubemap_size = 512;
     CubeRenderTarget_Init(
         &render_ctx->dynamic_cubemap,
-        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
+        render_ctx->device, render_ctx->cubemap_size, render_ctx->cubemap_size,
         render_ctx->backbuffer_format,
         (float *)&render_ctx->main_pass_constants.fog_color
     );
-    render_ctx->cubemap_size = 512;
     // -- initialize cubemap cameras
     _ASSERT_EXPR(cam_size > 0, _T("invalid camera byte size"));
     for (int i = 0; i < 6; ++i) {

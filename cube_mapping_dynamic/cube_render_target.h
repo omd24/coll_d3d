@@ -24,7 +24,7 @@ struct CubeRenderTarget {
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_srv;
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv [6];
 
-    ID3D12Resource * cupemap;
+    ID3D12Resource * cubemap;
 
     FLOAT initial_clear_color [4];
 

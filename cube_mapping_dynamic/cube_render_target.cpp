@@ -10,7 +10,7 @@ create_descriptors_internal (CubeRenderTarget * rt) {
     srv_desc.TextureCube.MipLevels = 1;
     srv_desc.TextureCube.ResourceMinLODClamp = 0.0f;
 
-    rt->device->CreateShaderResourceView(rt->cupemap, &srv_desc, rt->hcpu_srv);
+    rt->device->CreateShaderResourceView(rt->cubemap, &srv_desc, rt->hcpu_srv);
 
     for (int i = 0; i < 6; ++i) {
         // NOTE(omid): use texture-2d-array for cubemap RTVs
@@ -27,7 +27,7 @@ create_descriptors_internal (CubeRenderTarget * rt) {
         rtv_desc.Texture2DArray.ArraySize = 1;
 
         // create RTV to ith face
-        rt->device->CreateRenderTargetView(rt->cupemap, &rtv_desc, rt->hcpu_rtv[i]);
+        rt->device->CreateRenderTargetView(rt->cubemap, &rtv_desc, rt->hcpu_rtv[i]);
     }
 }
 static void
@@ -67,7 +67,7 @@ create_resources_internal (CubeRenderTarget * rt) {
     rt->device->CreateCommittedResource(
         &heap_def, D3D12_HEAP_FLAG_NONE,
         &tex_desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        &clear_color, IID_PPV_ARGS(&rt->cupemap)
+        &clear_color, IID_PPV_ARGS(&rt->cubemap)
     );
 }
 void
@@ -88,7 +88,7 @@ CubeRenderTarget_Init (CubeRenderTarget * rt, ID3D12Device * dev, UINT w, UINT h
 }
 void
 CubeRenderTarget_Deinit (CubeRenderTarget * rt) {
-    rt->cupemap->Release();
+    rt->cubemap->Release();
 }
 void
 CubeRenderTarget_CreateDescriptors (
@@ -113,7 +113,7 @@ CubeRenderTarget_Resize (CubeRenderTarget * rt, UINT w, UINT h) {
             rt->width = w;
             rt->height = h;
 
-            rt->cupemap->Release();
+            rt->cubemap->Release();
             create_resources_internal(rt);
 
             // -- new resource so create new descriptors
