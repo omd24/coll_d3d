@@ -17,8 +17,8 @@ struct MaterialData {
     float4x4 mat_transform;
 
     uint diffuse_map_index;
-    uint mat_pad0;
-    uint mat_pad1;
+    uint refract;
+    float refract_ratio;
     uint mat_pad2;
 };
 

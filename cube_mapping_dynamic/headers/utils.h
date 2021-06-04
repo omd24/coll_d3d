@@ -80,8 +80,8 @@ struct MaterialData {
     XMFLOAT4X4  mat_transform;
 
     UINT        diffuse_map_index;
-    UINT        mat_pad0;
-    UINT        mat_pad1;
+    UINT        refract;
+    float       refract_ratio;
     UINT        mat_pad2;
 };
 
@@ -119,6 +119,11 @@ struct Material {
     XMFLOAT3 fresnel_r0;
     float roughness;
     XMFLOAT4X4 mat_transform;
+
+    // TODO(omid): adjust bool padding problem (1 byte C/C++ and 4 bytes in HLSL) 
+    int is_refractor;
+
+    float refract_ratio;
 };
 
 struct Texture {

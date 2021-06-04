@@ -56,6 +56,10 @@ bool global_imgui_enabled = true;
 bool global_imgui_enabled = false;
 #endif // defined(ENABLE_DEARIMGUI)
 
+enum REFLECT_REFRACT_MODE {
+    MODE_REFLECTION = 0,
+    MODE_REFRACTION
+};
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_SKY = 1,
@@ -315,6 +319,8 @@ create_materials (Material out_materials []) {
     out_materials[MAT_BRICK].roughness = 0.3f;
     out_materials[MAT_BRICK].mat_transform = Identity4x4();
     out_materials[MAT_BRICK].n_frames_dirty = NUM_QUEUING_FRAMES;
+    out_materials[MAT_BRICK].is_refractor = MODE_REFLECTION;
+    out_materials[MAT_BRICK].refract_ratio = 1.0f;
 
     strcpy_s(out_materials[MAT_TILE].name, "tile");
     out_materials[MAT_TILE].mat_cbuffer_index = 1;
@@ -324,6 +330,8 @@ create_materials (Material out_materials []) {
     out_materials[MAT_TILE].roughness = 0.1f;
     out_materials[MAT_TILE].mat_transform = Identity4x4();
     out_materials[MAT_TILE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    out_materials[MAT_TILE].is_refractor = MODE_REFLECTION;
+    out_materials[MAT_TILE].refract_ratio = 1.0f;
 
     strcpy_s(out_materials[MAT_MIRROR].name, "mirror");
     out_materials[MAT_MIRROR].mat_cbuffer_index = 2;
@@ -333,6 +341,8 @@ create_materials (Material out_materials []) {
     out_materials[MAT_MIRROR].roughness = 0.1f;
     out_materials[MAT_MIRROR].mat_transform = Identity4x4();
     out_materials[MAT_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+    out_materials[MAT_MIRROR].is_refractor = MODE_REFLECTION;     // assign 1 for refraction
+    out_materials[MAT_MIRROR].refract_ratio = 1.0f;
 
     strcpy_s(out_materials[MAT_SKULL].name, "skull");
     out_materials[MAT_SKULL].mat_cbuffer_index = 3;
@@ -342,6 +352,8 @@ create_materials (Material out_materials []) {
     out_materials[MAT_SKULL].roughness = 0.2f;
     out_materials[MAT_SKULL].mat_transform = Identity4x4();
     out_materials[MAT_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+    out_materials[MAT_SKULL].is_refractor = MODE_REFLECTION;
+    out_materials[MAT_SKULL].refract_ratio = 1.0f;
 
     strcpy_s(out_materials[MAT_SKY].name, "sky");
     out_materials[MAT_SKY].mat_cbuffer_index = 4;
@@ -351,6 +363,8 @@ create_materials (Material out_materials []) {
     out_materials[MAT_SKY].roughness = 1.0f;
     out_materials[MAT_SKY].mat_transform = Identity4x4();
     out_materials[MAT_SKY].n_frames_dirty = NUM_QUEUING_FRAMES;
+    out_materials[MAT_SKY].is_refractor = MODE_REFLECTION;
+    out_materials[MAT_SKY].refract_ratio = 1.0f;
 }
 static void
 create_skull_geometry (D3DRenderContext * render_ctx) {
@@ -711,7 +725,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_BOX_ID].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = false;   // hide box for now
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
 
@@ -1549,6 +1563,8 @@ update_mat_buffer (D3DRenderContext * render_ctx) {
             mat_data.roughness = render_ctx->materials[i].roughness;
             XMStoreFloat4x4(&mat_data.mat_transform, XMMatrixTranspose(mat_transform));
             mat_data.diffuse_map_index = mat->diffuse_srvheap_index;
+            mat_data.refract = mat->is_refractor;
+            mat_data.refract_ratio = mat->refract_ratio;
 
             uint8_t * mat_ptr = render_ctx->frame_resources[frame_index].material_ptr + ((UINT64)mat->mat_cbuffer_index * mat_data_size);
             memcpy(mat_ptr, &mat_data, mat_data_size);
@@ -2020,6 +2036,16 @@ d3d_resize (D3DRenderContext * render_ctx) {
     }
 
     Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
+}
+static float
+to_refract_ratio (int selected_item) {
+    switch (selected_item) {
+    case 0: return 1.0f;
+    case 1: return 0.95f;
+    case 2: return 0.9f;
+    default:
+        return 1.0f;
+    }
 }
 static void
 check_active_item () {
@@ -2534,6 +2560,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGuiWindowFlags window_flags = 0;
     bool beginwnd;
     int selected_mat = 0;
+    int selected_refract_ratio = 0;
+    static int mode = 0;
     if (global_imgui_enabled) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -2600,6 +2628,22 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::Combo(
                     "Skybox Texture", &selected_mat,
                     "   Grass Cube\0   Desert Cube\0   Snow Cube\0   Sunset Cube\0\0");
+
+                if (ImGui::Combo("Refraction Ratio", &selected_refract_ratio,"   1.0\0   0.95\0   0.9\0\0")) {
+                    render_ctx->materials[MAT_MIRROR].refract_ratio = to_refract_ratio(selected_refract_ratio);
+                    render_ctx->materials[MAT_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+                }
+
+                if (ImGui::RadioButton("Refraction", mode == MODE_REFRACTION)) {
+                    mode = MODE_REFRACTION;
+                    render_ctx->materials[MAT_MIRROR].is_refractor = MODE_REFRACTION;
+                    render_ctx->materials[MAT_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+                } ImGui::SameLine();
+                if (ImGui::RadioButton("Reflection", mode == MODE_REFLECTION)) {
+                    mode = MODE_REFLECTION;
+                    render_ctx->materials[MAT_MIRROR].is_refractor = MODE_REFLECTION;
+                    render_ctx->materials[MAT_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+                };
 
                 ImGui::Text("\n");
                 ImGui::Separator();

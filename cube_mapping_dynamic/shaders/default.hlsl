@@ -82,8 +82,14 @@ PixelShader_Main (VertOut pin) : SV_Target{
     );
     float4 lit_color = ambient + direct_light;
 
-    // add specular reflections
-    float3 r = reflect(-to_eye, pin.normal_world);
+    // reflect or refract ?
+    float3 r = 0.0f;
+    
+    if (0 == mat_data.refract)
+        r = reflect(-to_eye, pin.normal_world);
+    else
+        r = refract(-to_eye, pin.normal_world, mat_data.refract_ratio);
+    
     float4 reflection_color = g_cubemap.Sample(g_sam_linear_wrap, r);
     float3 fresnel_factor = schlick_fresnel(fresnel_r0, pin.normal_world, r);
     lit_color.rgb += shininess * fresnel_factor * reflection_color.rgb;
