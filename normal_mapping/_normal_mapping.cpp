@@ -62,7 +62,7 @@ enum RENDER_LAYER : int {
     _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_SKULL = 0,
+    RITEM_GLOBE = 0,
     RITEM_SKY = 1,
     RITEM_BOX = 2,
     RITEM_GRID = 3,
@@ -304,6 +304,7 @@ create_materials (Material out_materials []) {
     strcpy_s(out_materials[MAT_BRICK].name, "bricks");
     out_materials[MAT_BRICK].mat_cbuffer_index = 0;
     out_materials[MAT_BRICK].diffuse_srvheap_index = BRICK_DIFFUSE_MAP;
+    out_materials[MAT_BRICK].normal_srvheap_index = BRICK_NORMAL_MAP;
     out_materials[MAT_BRICK].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
     out_materials[MAT_BRICK].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
     out_materials[MAT_BRICK].roughness = 0.3f;
@@ -313,6 +314,7 @@ create_materials (Material out_materials []) {
     strcpy_s(out_materials[MAT_TILE].name, "tile");
     out_materials[MAT_TILE].mat_cbuffer_index = 1;
     out_materials[MAT_TILE].diffuse_srvheap_index = TILE_DIFFUSE_MAP;
+    out_materials[MAT_TILE].normal_srvheap_index = TILE_NORMAL_MAP;
     out_materials[MAT_TILE].diffuse_albedo = XMFLOAT4(0.9f, 0.9f, 0.9f, 1.0f);
     out_materials[MAT_TILE].fresnel_r0 = XMFLOAT3(0.2f, 0.2f, 0.2f);
     out_materials[MAT_TILE].roughness = 0.1f;
@@ -322,6 +324,7 @@ create_materials (Material out_materials []) {
     strcpy_s(out_materials[MAT_MIRROR].name, "mirror");
     out_materials[MAT_MIRROR].mat_cbuffer_index = 2;
     out_materials[MAT_MIRROR].diffuse_srvheap_index = WHITE1x1_DIFFUSE_MAP;
+    out_materials[MAT_MIRROR].normal_srvheap_index = WHITE1x1_NORMAL_MAP;
     out_materials[MAT_MIRROR].diffuse_albedo = XMFLOAT4(0.0f, 0.0f, 0.1f, 1.0f);
     out_materials[MAT_MIRROR].fresnel_r0 = XMFLOAT3(0.98f, 0.97f, 0.95f);
     out_materials[MAT_MIRROR].roughness = 0.1f;
@@ -584,24 +587,28 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
         vertices[k].position = box_vertices[i].Position;
         vertices[k].normal = box_vertices[i].Normal;
         vertices[k].texc = box_vertices[i].TexC;
+        vertices[k].tangent_u = box_vertices[i].TangentU;
     }
 
     for (size_t i = 0; i < _GRID_VTX_CNT; ++i, ++k) {
         vertices[k].position = grid_vertices[i].Position;
         vertices[k].normal = grid_vertices[i].Normal;
         vertices[k].texc = grid_vertices[i].TexC;
+        vertices[k].tangent_u = grid_vertices[i].TangentU;
     }
 
     for (size_t i = 0; i < _SPHERE_VTX_CNT; ++i, ++k) {
         vertices[k].position = sphere_vertices[i].Position;
         vertices[k].normal = sphere_vertices[i].Normal;
         vertices[k].texc = sphere_vertices[i].TexC;
+        vertices[k].tangent_u = sphere_vertices[i].TangentU;
     }
 
     for (size_t i = 0; i < _CYLINDER_VTX_CNT; ++i, ++k) {
         vertices[k].position = cylinder_vertices[i].Position;
         vertices[k].normal = cylinder_vertices[i].Normal;
         vertices[k].texc = cylinder_vertices[i].TexC;
+        vertices[k].tangent_u = cylinder_vertices[i].TangentU;
     }
 
     // -- pack indices
@@ -678,7 +685,7 @@ create_render_items (D3DRenderContext * render_ctx) {
 
     // box
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
     render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 1;
     render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
@@ -692,21 +699,21 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_BOX];
 
-    // skull
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
-    render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 2;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
-    render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_SKULL];
-    render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].index_count = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].start_index_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
+    // globe
+	XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].world, XMMatrixScaling(2.0f, 2.0f, 2.0f)*XMMatrixTranslation(0.0f, 2.0f, 0.0f));
+	XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].mat = &render_ctx->materials[MAT_MIRROR];
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].initialized = true;
     render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GLOBE];
 
     // grid
     render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
@@ -725,7 +732,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GRID];
 
     // cylinders and spheres
-    XMMATRIX brick_tex_transform = XMMatrixScaling(1.0f, 1.0f, 1.0f);
+    XMMATRIX brick_tex_transform = XMMatrixScaling(1.5f, 2.0f, 1.0f);
     UINT obj_cb_index = 4;
     int _curr = 4;
     for (int i = 0; i < 5; ++i) {
@@ -1160,7 +1167,7 @@ static void
 create_pso (D3DRenderContext * render_ctx) {
     // -- Create vertex-input-layout Elements
 
-    D3D12_INPUT_ELEMENT_DESC std_input_desc[3];
+    D3D12_INPUT_ELEMENT_DESC std_input_desc[4];
     std_input_desc[0] = {};
     std_input_desc[0].SemanticName = "POSITION";
     std_input_desc[0].SemanticIndex = 0;
@@ -1184,6 +1191,14 @@ create_pso (D3DRenderContext * render_ctx) {
     std_input_desc[2].InputSlot = 0;
     std_input_desc[2].AlignedByteOffset = 24;
     std_input_desc[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    std_input_desc[3] = {};
+    std_input_desc[3].SemanticName = "TANGENT";
+    std_input_desc[3].SemanticIndex = 0;
+    std_input_desc[3].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    std_input_desc[3].InputSlot = 0;
+    std_input_desc[3].AlignedByteOffset = 32;
+    std_input_desc[3].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
     //
     // -- Create PSO for Opaque objs
@@ -1381,6 +1396,7 @@ update_mat_buffer (D3DRenderContext * render_ctx) {
             mat_data.roughness = render_ctx->materials[i].roughness;
             XMStoreFloat4x4(&mat_data.mat_transform, XMMatrixTranspose(mat_transform));
             mat_data.diffuse_map_index = mat->diffuse_srvheap_index;
+            mat_data.normal_map_index = mat->normal_srvheap_index;
 
             uint8_t * mat_ptr = render_ctx->frame_resources[frame_index].material_ptr + ((UINT64)mat->mat_cbuffer_index * mat_data_size);
             memcpy(mat_ptr, &mat_data, mat_data_size);

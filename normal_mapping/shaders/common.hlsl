@@ -17,14 +17,14 @@ struct MaterialData {
     float4x4 mat_transform;
 
     uint diffuse_map_index;
-    uint mat_pad0;
+    uint normal_map_index;
     uint mat_pad1;
     uint mat_pad2;
 };
 
 TextureCube g_cubemap : register(t0);
 
-Texture2D g_diffuse_maps[4] : register(t1);
+Texture2D g_tex_maps[10] : register(t1);
 
 StructuredBuffer<MaterialData> g_mat_data : register(t0, space1);
 
@@ -73,4 +73,28 @@ cbuffer PerPassConstantBuffer : register(b1){
     // indices [NUM_DIR_LIGHTS+NUM_POINT_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHT+NUM_SPOT_LIGHTS)
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light g_lights[MAX_LIGHTS];
+}
+
+//
+// Transform a normal map sample to world space
+// suffix:
+// _w for world space
+// _t for tangent space
+//
+float3
+normal_sample_to_world_space (float3 nmap_sample, float3 unit_normal_w, float3 tangent_w) {
+    // uncompress each component from [0, 1] to [-1, 1]
+    float3 normal_t = 2.0f * nmap_sample - 1.0f;
+
+    // build orthonormal TBN basis
+    float3 N = unit_normal_w;
+    float3 T = normalize(tangent_w - dot(tangent_w, N) * N);
+    float3 B = cross(N, T);
+
+    float3x3 TBN = float3x3(T, B, N);
+
+    // transform from tangent space to world space
+    float3 bumped_normal_w = mul(normal_t, TBN);
+
+    return bumped_normal_w;
 }

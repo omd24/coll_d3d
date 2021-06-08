@@ -80,7 +80,7 @@ struct MaterialData {
     XMFLOAT4X4  mat_transform;
 
     UINT        diffuse_map_index;
-    UINT        mat_pad0;
+    UINT        normal_map_index;
     UINT        mat_pad1;
     UINT        mat_pad2;
 };
@@ -89,6 +89,7 @@ struct Vertex {
     XMFLOAT3 position;
     XMFLOAT3 normal;
     XMFLOAT2 texc;
+    XMFLOAT3 tangent_u;
 };
 struct GeomVertex {
     XMFLOAT3 Position;
@@ -780,6 +781,7 @@ create_cylinder (float bottom_radius, float top_radius, float height, GeomVertex
             vertex.TexC.x = (float)j / n_slice;
             vertex.TexC.y = 1.0f - (float)i / n_stack;
 
+            // NOTE(omid): refer to http://www.d3dcoder.net/d3d12.htm, GeometryGenerator::CreateCylinder()
             // This is unit length.
             vertex.TangentU = XMFLOAT3(-s, 0.0f, c);
 
