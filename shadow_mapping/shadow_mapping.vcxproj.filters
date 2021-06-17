@@ -42,6 +42,9 @@
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp">
       <Filter>DearImGui</Filter>
     </ClCompile>
+    <ClCompile Include="shadow_map.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="camera.h">
@@ -61,6 +64,9 @@
     </ClInclude>
     <ClInclude Include="headers\utils.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shadow_map.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

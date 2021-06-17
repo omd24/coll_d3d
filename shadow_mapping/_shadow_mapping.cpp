@@ -31,6 +31,7 @@
 
 #include "camera.h"
 
+#include "shadow_map.h"
 
 #define ENABLE_DEARIMGUI
 
@@ -1959,7 +1960,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     HWND hwnd = CreateWindowEx(
         0,                                              // Optional window styles.
         wc.lpszClassName,                               // Window class
-        _T("Normal Mapping Demo"),                      // Window title
+        _T("Shadow Mapping Demo"),                      // Window title
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,               // Window style
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,    // Size and position settings
         0 /* Parent window */, 0 /* Menu */, hInstance  /* Instance handle */,
