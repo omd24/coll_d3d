@@ -59,7 +59,8 @@ bool g_imgui_enabled = false;
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_DEBUG = 1,
-    LAYER_SKY = 2,
+    LAYER_SHADOW_DEBUG = 2,
+    LAYER_SKY = 3,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -68,10 +69,11 @@ enum ALL_RENDERITEMS {
     RITEM_SKY = 1,
     RITEM_BOX = 2,
     RITEM_GRID = 3,
-    ... skull
+    RITEM_SKULL = 4,
+    RITEM_QUAD = 5,
 
     // NOTE(omid): following indices are meaningless. DON'T use them! 
-    RITEM_CYLENDER0 = 4,
+    RITEM_CYLENDER0 = 6,
     RITEM_CYLENDER1,
     RITEM_CYLENDER2,
     RITEM_CYLENDER3,
@@ -81,7 +83,7 @@ enum ALL_RENDERITEMS {
     RITEM_CYLENDER7,
     RITEM_CYLENDER8,
     RITEM_CYLENDER9,
-    RITEM_SPHERE0 = 14,
+    RITEM_SPHERE0 = 16,
     RITEM_SPHERE1,
     RITEM_SPHERE2,
     RITEM_SPHERE3,
@@ -94,7 +96,7 @@ enum ALL_RENDERITEMS {
 
     _COUNT_RENDERITEM
 };
-static_assert(24 == _COUNT_RENDERITEM, _T("invalid render items count"));
+static_assert(26 == _COUNT_RENDERITEM, _T("invalid render items count"));
 enum SHADERS_CODE {
     SHADER_STANDARD_VS = 0,
     SHADER_OPAQUE_PS = 1,
@@ -118,7 +120,8 @@ enum SUBMESH_INDEX {
     _BOX_ID,
     _GRID_ID,
     _SPHERE_ID,
-    _CYLINDER_ID
+    _CYLINDER_ID,
+    _QUAD_ID
 };
 enum MAT_INDEX {
     MAT_BRICK = 0,
@@ -249,6 +252,7 @@ struct D3DRenderContext {
     // Render items divided by PSO.
     RenderItemArray                 opaque_ritems;
     RenderItemArray                 environment_ritems;
+    RenderItemArray                 debug_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -534,8 +538,11 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
 #define _CYLINDER_VTX_CNT   485
 #define _CYLINDER_IDX_CNT   2520
 
-#define _TOTAL_VTX_CNT  (_BOX_VTX_CNT + _GRID_VTX_CNT + _SPHERE_VTX_CNT + _CYLINDER_VTX_CNT)
-#define _TOTAL_IDX_CNT  (_BOX_IDX_CNT + _GRID_IDX_CNT + _SPHERE_IDX_CNT + _CYLINDER_IDX_CNT)
+#define _QUAD_VTX_CNT   4
+#define _QUAD_IDX_CNT   6
+
+#define _TOTAL_VTX_CNT  (_BOX_VTX_CNT + _GRID_VTX_CNT + _SPHERE_VTX_CNT + _CYLINDER_VTX_CNT + _QUAD_VTX_CNT)
+#define _TOTAL_IDX_CNT  (_BOX_IDX_CNT + _GRID_IDX_CNT + _SPHERE_IDX_CNT + _CYLINDER_IDX_CNT + _QUAD_IDX_CNT)
 
 static void
 create_shapes_geometry (D3DRenderContext * render_ctx) {
@@ -571,6 +578,10 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
     create_sphere(0.5f, sphere_vertices, sphere_indices);
     create_cylinder(0.5f, 0.3f, 3.0f, cylinder_vertices, cylinder_indices);
 
+    GeomVertex quad_verts[_QUAD_VTX_CNT];
+    uint16_t quad_indices[_QUAD_IDX_CNT];
+    create_quad(0.0f, 0.0f, 1.0f, 1.0f, 0.0f, quad_verts, quad_indices);
+
     // We are concatenating all the geometry into one big vertex/index buffer.  So
     // define the regions in the buffer each submesh covers.
 
@@ -579,12 +590,14 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
     UINT grid_vertex_offset = _BOX_VTX_CNT;
     UINT sphere_vertex_offset = grid_vertex_offset + _GRID_VTX_CNT;
     UINT cylinder_vertex_offset = sphere_vertex_offset + _SPHERE_VTX_CNT;
+    UINT quad_vertex_offset = cylinder_vertex_offset + _CYLINDER_VTX_CNT;
 
     // Cache the starting index for each object in the concatenated index buffer.
     UINT box_index_offset = 0;
     UINT grid_index_offset = _BOX_IDX_CNT;
     UINT sphere_index_offset = grid_index_offset + _GRID_IDX_CNT;
     UINT cylinder_index_offsett = sphere_index_offset + _SPHERE_IDX_CNT;
+    UINT quad_index_offset = cylinder_index_offsett + _CYLINDER_IDX_CNT;
 
     // Define the SubmeshGeometry that cover different 
     // regions of the vertex/index buffers.
@@ -608,6 +621,11 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
     cylinder_submesh.start_index_location = cylinder_index_offsett;
     cylinder_submesh.base_vertex_location = cylinder_vertex_offset;
 
+    SubmeshGeometry quad_submesh = {};
+    quad_submesh.index_count = _QUAD_IDX_CNT;
+    quad_submesh.start_index_location = quad_index_offset;
+    quad_submesh.base_vertex_location = quad_vertex_offset;
+
     // Extract the vertex elements we are interested in and pack the
     // vertices of all the meshes into one vertex buffer.
 
@@ -618,45 +636,44 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
         vertices[k].texc = box_vertices[i].TexC;
         vertices[k].tangent_u = box_vertices[i].TangentU;
     }
-
     for (size_t i = 0; i < _GRID_VTX_CNT; ++i, ++k) {
         vertices[k].position = grid_vertices[i].Position;
         vertices[k].normal = grid_vertices[i].Normal;
         vertices[k].texc = grid_vertices[i].TexC;
         vertices[k].tangent_u = grid_vertices[i].TangentU;
     }
-
     for (size_t i = 0; i < _SPHERE_VTX_CNT; ++i, ++k) {
         vertices[k].position = sphere_vertices[i].Position;
         vertices[k].normal = sphere_vertices[i].Normal;
         vertices[k].texc = sphere_vertices[i].TexC;
         vertices[k].tangent_u = sphere_vertices[i].TangentU;
     }
-
     for (size_t i = 0; i < _CYLINDER_VTX_CNT; ++i, ++k) {
         vertices[k].position = cylinder_vertices[i].Position;
         vertices[k].normal = cylinder_vertices[i].Normal;
         vertices[k].texc = cylinder_vertices[i].TexC;
         vertices[k].tangent_u = cylinder_vertices[i].TangentU;
     }
+    for (size_t i = 0; i < _QUAD_VTX_CNT; ++i, ++k) {
+        vertices[k].position = quad_verts[i].Position;
+        vertices[k].normal = quad_verts[i].Normal;
+        vertices[k].texc = quad_verts[i].TexC;
+        vertices[k].tangent_u = quad_verts[i].TangentU;
+    }
+
 
     // -- pack indices
     k = 0;
-    for (size_t i = 0; i < _BOX_IDX_CNT; ++i, ++k) {
+    for (size_t i = 0; i < _BOX_IDX_CNT; ++i, ++k)
         indices[k] = box_indices[i];
-    }
-
-    for (size_t i = 0; i < _GRID_IDX_CNT; ++i, ++k) {
+    for (size_t i = 0; i < _GRID_IDX_CNT; ++i, ++k)
         indices[k] = grid_indices[i];
-    }
-
-    for (size_t i = 0; i < _SPHERE_IDX_CNT; ++i, ++k) {
+    for (size_t i = 0; i < _SPHERE_IDX_CNT; ++i, ++k)
         indices[k] = sphere_indices[i];
-    }
-
-    for (size_t i = 0; i < _CYLINDER_IDX_CNT; ++i, ++k) {
+    for (size_t i = 0; i < _CYLINDER_IDX_CNT; ++i, ++k)
         indices[k] = cylinder_indices[i];
-    }
+    for (size_t i = 0; i < _QUAD_IDX_CNT; ++i, ++k)
+        indices[k] = quad_indices[i];
 
     UINT vb_byte_size = _TOTAL_VTX_CNT * sizeof(Vertex);
     UINT ib_byte_size = _TOTAL_IDX_CNT * sizeof(uint16_t);
@@ -686,6 +703,8 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
     render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID] = sphere_submesh;
     render_ctx->geom[GEOM_SHAPES].submesh_names[_CYLINDER_ID] = "cylinder";
     render_ctx->geom[GEOM_SHAPES].submesh_geoms[_CYLINDER_ID] = cylinder_submesh;
+    render_ctx->geom[GEOM_SHAPES].submesh_names[_QUAD_ID] = "quad";
+    render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID] = quad_submesh;
 
     // -- cleanup
     free(scratch);
@@ -712,10 +731,26 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->environment_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKY];
     render_ctx->environment_ritems.size++;
 
+    // quad
+    render_ctx->all_ritems.ritems[RITEM_QUAD].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_QUAD].mat = &render_ctx->materials[MAT_BRICK];
+    render_ctx->all_ritems.ritems[RITEM_QUAD].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->debug_ritems.ritems[render_ctx->debug_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_QUAD];
+
     // box
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 2;
     render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
     render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -731,7 +766,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     // globe
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].world, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 2.0f, 0.0f));
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 3;
     render_ctx->all_ritems.ritems[RITEM_GLOBE].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_GLOBE].mat = &render_ctx->materials[MAT_MIRROR];
     render_ctx->all_ritems.ritems[RITEM_GLOBE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -740,14 +775,30 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_GLOBE].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_SPHERE_ID].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_GLOBE].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_GLOBE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_GLOBE].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].initialized = false; // not using globe in this demp
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GLOBE];
+
+    // skull
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f)*XMMatrixTranslation(0.0f, 1.0f, 0.0f));
+    render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 4;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
+    render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_SKULL];
+    render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].index_count = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].start_index_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = false;
+    render_ctx->all_ritems.size++;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
 
     // grid
     render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform, XMMatrixScaling(8.0f, 8.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 3;
+    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 5;
     render_ctx->all_ritems.ritems[RITEM_GRID].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_GRID].mat = &render_ctx->materials[MAT_TILE];
     render_ctx->all_ritems.ritems[RITEM_GRID].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -762,8 +813,8 @@ create_render_items (D3DRenderContext * render_ctx) {
 
     // cylinders and spheres
     XMMATRIX brick_tex_transform = XMMatrixScaling(1.5f, 2.0f, 1.0f);
-    UINT obj_cb_index = 4;
-    int _curr = 4;
+    UINT obj_cb_index = 6;
+    int _curr = 6;
     for (int i = 0; i < 5; ++i) {
         XMMATRIX left_cylinder_world = XMMatrixTranslation(-5.0f, 1.5f, -10.0f + i * 5.0f);
         XMMATRIX right_cylinder_world = XMMatrixTranslation(+5.0f, 1.5f, -10.0f + i * 5.0f);
@@ -1346,6 +1397,32 @@ create_pso (D3DRenderContext * render_ctx) {
     opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
+
+    //
+    // -- PSO for shadow map pass
+    //
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC smap_pso_desc = opaque_pso_desc;
+    smap_pso_desc.RasterizerState.DepthBias = 100000;
+    smap_pso_desc.RasterizerState.DepthBiasClamp = 0.0f;
+    smap_pso_desc.RasterizerState.SlopeScaledDepthBias = 1.0f;
+    smap_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_SHADOW_VS]->GetBufferPointer();
+    smap_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_SHADOW_VS]->GetBufferSize();
+    smap_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_SHADOW_OPAQUE_PS]->GetBufferPointer();
+    smap_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_SHADOW_OPAQUE_PS]->GetBufferSize();
+    //
+    // shadow map pass does not have a render target
+    smap_pso_desc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    smap_pso_desc.NumRenderTargets = 0;
+    render_ctx->device->CreateGraphicsPipelineState(&smap_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW_DEBUG]));
+
+    //
+    // -- PSO for debug layer
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc = opaque_pso_desc;
+    debug_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferPointer();
+    debug_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferSize();
+    debug_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_PS]->GetBufferPointer();
+    debug_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_PS]->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&debug_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_DEBUG]));
 
     //
     // -- PSO for sky
@@ -2370,7 +2447,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion
 
-    create_descriptor_heaps(render_ctx);
+    create_descriptor_heaps(render_ctx, g_smap);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2472,6 +2549,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Compile Shaders
     TCHAR standard_shader_path [] = _T("./shaders/default.hlsl");
     TCHAR sky_shader_path [] = _T("./shaders/sky.hlsl");
+    TCHAR shadow_shader_path [] = _T("./shaders/shadows.hlsl");
+    TCHAR debug_shader_path [] = _T("./shaders/shadow_debug.hlsl");
 
     {   // standard shaders
         compile_shader(standard_shader_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_STANDARD_VS]);
@@ -2480,6 +2559,20 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         DxcDefine defines_fog[n_define_fog] = {};
         defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
         compile_shader(standard_shader_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
+    }
+    {   // shadow shaders
+        compile_shader(shadow_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SHADOW_VS]);
+        compile_shader(shadow_shader_path, _T("PS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SHADOW_OPAQUE_PS]);
+
+        int const n_define_alphatest = 1;
+        DxcDefine defines_alphatest[n_define_alphatest] = {};
+        defines_alphatest[0] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
+        compile_shader(shadow_shader_path, _T("PS"), _T("vs_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_SHADOW_ALPHATESTED_PS]);
+    }
+    {   // debug shaders
+        compile_shader(debug_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_VS]);
+
+        compile_shader(debug_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_PS]);
     }
     {   // sky shaders
         compile_shader(sky_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_VS]);

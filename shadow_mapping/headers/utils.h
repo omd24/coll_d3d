@@ -36,7 +36,7 @@ struct ObjectConstants {
     UINT instance_pad1;
     UINT instance_pad2;
 
-    float padding [28];
+    float padding[28];
 };
 static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
 
@@ -308,10 +308,10 @@ update_subresources_heap (
     D3D12_RESOURCE_DESC intermediate_desc = intermediate->GetDesc();
     D3D12_RESOURCE_DESC destination_desc = dest_resource->GetDesc();
     _ASSERT_EXPR(!(intermediate_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
-                   intermediate_desc.Width < required_size + layouts[0].Offset ||
-                   required_size > (SIZE_T) - 1 ||
-                   (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
-                    (first_subresource != 0 || n_subresources != 1))), _T("validation failed!"));
+                 intermediate_desc.Width < required_size + layouts[0].Offset ||
+                 required_size > (SIZE_T) - 1 ||
+                 (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
+                 (first_subresource != 0 || n_subresources != 1))), _T("validation failed!"));
 
     BYTE * data;
     /*_ASSERT_EXPR*/(intermediate->Map(0, NULL, reinterpret_cast<void**>(&data)), _T("Mapping intermediate resource failed"));
@@ -398,10 +398,10 @@ update_subresources_stack (
     D3D12_RESOURCE_DESC intermediate_desc = intermediate->GetDesc();
     D3D12_RESOURCE_DESC destination_desc = dest_resource->GetDesc();
     SIMPLE_ASSERT_FALSE((intermediate_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
-                         intermediate_desc.Width < required_size + layouts[0].Offset ||
-                         required_size > (SIZE_T) - 1 ||
-                         (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
-                          (first_subresource != 0 || n_subresources != 1))), "validation failed!");
+                        intermediate_desc.Width < required_size + layouts[0].Offset ||
+                        required_size > (SIZE_T) - 1 ||
+                        (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
+                        (first_subresource != 0 || n_subresources != 1))), "validation failed!");
 
     BYTE * data;
     CHECK_AND_FAIL(intermediate->Map(0, NULL, reinterpret_cast<void**>(&data)));
@@ -976,4 +976,40 @@ create_grid32 (float width, float depth, UINT32 m, UINT32 n, GeomVertex out_vtx 
             k += 6; // next quad
         }
     }
+}
+static void
+create_quad (float x, float y, float w, float h, float depth, GeomVertex out_vtx [], uint16_t out_idx []) {
+
+    out_vtx[0] = {
+        .Position = {x, y - h, depth},
+        .Normal = {0.0f, 0.0f, -1.0f},
+        .TangentU = {1.0f, 0.0f, 0.0f},
+        .TexC = {0.0f, 1.0f}
+    };
+    out_vtx[1] = {
+        .Position = {x, y, depth},
+        .Normal = {0.0f, 0.0f, -1.0f},
+        .TangentU = {1.0f, 0.0f, 0.0f},
+        .TexC = {0.0f, 0.0f}
+    };
+    out_vtx[2] = {
+        .Position = {x + w, y, depth},
+        .Normal = {0.0f, 0.0f, -1.0f},
+        .TangentU = {1.0f, 0.0f, 0.0f},
+        .TexC = {1.0f, 0.0f}
+    };
+    out_vtx[3] = {
+        .Position = {x + w, y - h, depth},
+        .Normal = {0.0f, 0.0f, -1.0f},
+        .TangentU = {1.0f, 0.0f, 0.0f},
+        .TexC = {1.0f, 1.0f}
+    };
+
+    out_idx[0] = 0;
+    out_idx[1] = 1;
+    out_idx[2] = 2;
+
+    out_idx[3] = 0;
+    out_idx[4] = 2;
+    out_idx[5] = 3;
 }
