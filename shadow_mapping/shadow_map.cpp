@@ -34,7 +34,7 @@ create_resources_internal (ShadowMap * smap) {
     tex_desc.SampleDesc.Count = 1;
     tex_desc.SampleDesc.Quality = 0;
     tex_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    tex_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    tex_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
     D3D12_HEAP_PROPERTIES heap_def = {};
     heap_def.Type = D3D12_HEAP_TYPE_DEFAULT;

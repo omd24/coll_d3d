@@ -23,7 +23,7 @@ struct MaterialData {
 };
 
 TextureCube g_cubemap : register(t0);
-TextureCube g_smap : register(t1);
+Texture2D g_smap : register(t1);
 
 Texture2D g_tex_maps[10] : register(t2);
 
@@ -35,7 +35,7 @@ SamplerState g_sam_linear_wrap : register(s2);
 SamplerState g_sam_linear_clamp : register(s3);
 SamplerState g_sam_anisotropic_wrap : register(s4);
 SamplerState g_sam_anisotropic_clamp : register(s5);
-SamplerState g_sam_shadow : register(s6);
+SamplerComparisonState g_sam_shadow : register(s6);
 
 cbuffer PerObjBuffer : register(b0){
     float4x4 g_world;
@@ -126,9 +126,7 @@ calc_shadow_factor (float4 shadow_pos_h) {
     
     [unroll]
     for (int i = 0; i < 9; ++i) {
-        percent_lit += g_smap.SampleCmpLevelZero(
-            g_sam_shadow, shadow_pos_h.xy + offsets[i], depth
-        ).r;
+        percent_lit += g_smap.SampleCmpLevelZero(g_sam_shadow, shadow_pos_h.xy + offsets[i], depth).r;
     }
     
     return percent_lit / 9.0f;  // averaging over shadow map algorithm's results

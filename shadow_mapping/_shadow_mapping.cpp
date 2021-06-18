@@ -59,7 +59,7 @@ bool g_imgui_enabled = false;
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_DEBUG = 1,
-    LAYER_SHADOW_DEBUG = 2,
+    LAYER_SHADOW_OPAQUE = 2,
     LAYER_SKY = 3,
 
     _COUNT_RENDERCOMPUTE_LAYER
@@ -892,7 +892,6 @@ static void
 draw_render_items (
     ID3D12GraphicsCommandList * cmd_list,
     ID3D12Resource * obj_cb,
-    UINT64 descriptor_increment_size,
     RenderItemArray * ritem_array
 ) {
     size_t obj_cbuffer_size = sizeof(ObjectConstants);
@@ -1413,7 +1412,7 @@ create_pso (D3DRenderContext * render_ctx) {
     // shadow map pass does not have a render target
     smap_pso_desc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
     smap_pso_desc.NumRenderTargets = 0;
-    render_ctx->device->CreateGraphicsPipelineState(&smap_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW_DEBUG]));
+    render_ctx->device->CreateGraphicsPipelineState(&smap_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW_OPAQUE]));
 
     //
     // -- PSO for debug layer
@@ -1654,12 +1653,15 @@ update_shadow_transform (GameTimer * timer) {
 static void
 update_shadow_pass_cb(ShadowMap * smap, D3DRenderContext * render_ctx, GameTimer * timer) {
     XMMATRIX view = XMLoadFloat4x4(&g_scene_ctx.light_view_mat);
+    XMVECTOR det_view = XMMatrixDeterminant(view);
     XMMATRIX proj = XMLoadFloat4x4(&g_scene_ctx.light_proj_mat);
-
+    XMVECTOR det_proj = XMMatrixDeterminant(proj);
     XMMATRIX view_proj = XMMatrixMultiply(view, proj);
-    XMMATRIX inv_view = XMMatrixInverse(&XMMatrixDeterminant(view), view);
-    XMMATRIX inv_proj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
-    XMMATRIX inv_view_proj = XMMatrixInverse(&XMMatrixDeterminant(view_proj), view_proj);
+    XMVECTOR det_view_proj = XMMatrixDeterminant(view_proj);
+
+    XMMATRIX inv_view = XMMatrixInverse(&det_view, view);
+    XMMATRIX inv_proj = XMMatrixInverse(&det_proj, proj);
+    XMMATRIX inv_view_proj = XMMatrixInverse(&det_view_proj, view_proj);
 
     UINT w = smap->width;
     UINT h = smap->height;
@@ -1727,10 +1729,53 @@ flush_command_queue (D3DRenderContext * render_ctx) {
         }
     }
 }
+static void
+draw_scene_to_shadow_map (ShadowMap * smap, D3DRenderContext * render_ctx) {
+    UINT frame_index = render_ctx->frame_index;
+    ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
+
+    cmdlist->RSSetViewports(1, &smap->viewport);
+    cmdlist->RSSetScissorRects(1, &smap->scissor_rect);
+
+    // change to DEPTH_WRITE
+    resource_usage_transition(
+        cmdlist,
+        smap->shadow_map,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE
+    );
+
+    cmdlist->ClearDepthStencilView(
+        smap->hcpu_dsv,
+        D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
+        1.0f, 0, 0, nullptr
+    );
+
+    // set null render target bc we only draw to depth buffer
+    // active pso should also specify 0 render targets
+    cmdlist->OMSetRenderTargets(0, nullptr, false, &smap->hcpu_dsv);
+
+    //bind pass cbuffer for shadow map pass
+    UINT pass_cb_byte_size = sizeof(PassConstants);
+    ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
+    D3D12_GPU_VIRTUAL_ADDRESS pass_cb_address = pass_cb->GetGPUVirtualAddress() + pass_cb_byte_size;
+    cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb_address);
+
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_SHADOW_OPAQUE]);
+
+    draw_render_items(cmdlist, render_ctx->frame_resources[frame_index].obj_cb, &render_ctx->opaque_ritems);
+
+    // change back to generic read so texture can be read in shader
+    resource_usage_transition(
+        cmdlist,
+        smap->shadow_map,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_GENERIC_READ
+    );
+}
 static HRESULT
-draw_main (D3DRenderContext * render_ctx) {
-    ... smap stuff
-        HRESULT ret = E_FAIL;
+draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
+    HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
     ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
@@ -1749,7 +1794,20 @@ draw_main (D3DRenderContext * render_ctx) {
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
+
+    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
+    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
+    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
+
+    // bind null srv for shadow map pass
+    cmdlist->SetGraphicsRootDescriptorTable(3, render_ctx->null_srv);
+
+    // Bind all textures. We only specify the first descriptor in the table
+    // Root sig knows how many descriptors we have in the table
+    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+
+    draw_scene_to_shadow_map(smap, render_ctx);
 
     // -- set viewport and scissor
     cmdlist->RSSetViewports(1, &render_ctx->viewport);
@@ -1772,15 +1830,8 @@ draw_main (D3DRenderContext * render_ctx) {
     cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
     cmdlist->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
 
-    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
-
-    // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     cmdlist->SetGraphicsRootConstantBufferView(1, pass_cb->GetGPUVirtualAddress());
-
-    // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
-    ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
-    cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
 
     // Bind the sky cube map.  For our demos, we just use one "world" cube map representing the environment
     // from far away, so all objects will use the same cube map and we only need to set it once per-frame.  
@@ -1790,31 +1841,34 @@ draw_main (D3DRenderContext * render_ctx) {
     sky_tex_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
     cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
 
-    // Bind all textures. We only specify the first descriptor in the table
-    // Root sig knows how many descriptors we have in the table
-    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
-
-    // 1. draw opaque objs first (opaque pso is currently used)
+    // 1. draw opaque objs
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
         &render_ctx->opaque_ritems
     );
 
-    // 2. draw sky
+    // 2. draw debug quad
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        &render_ctx->debug_ritems
+    );
+
+    // 3. draw sky
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_SKY]);
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
         &render_ctx->environment_ritems
     );
 
     if (g_imgui_enabled)
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
-// -- indicate that the backbuffer will now be used to present
+    // -- indicate that the backbuffer will now be used to present
     resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     // -- finish populating command list
@@ -2562,12 +2616,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
     {   // shadow shaders
         compile_shader(shadow_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SHADOW_VS]);
-        compile_shader(shadow_shader_path, _T("PS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SHADOW_OPAQUE_PS]);
+        compile_shader(shadow_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SHADOW_OPAQUE_PS]);
 
         int const n_define_alphatest = 1;
         DxcDefine defines_alphatest[n_define_alphatest] = {};
         defines_alphatest[0] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
-        compile_shader(shadow_shader_path, _T("PS"), _T("vs_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_SHADOW_ALPHATESTED_PS]);
+        compile_shader(shadow_shader_path, _T("PS"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_SHADOW_ALPHATESTED_PS]);
     }
     {   // debug shaders
         compile_shader(debug_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_VS]);
@@ -2731,7 +2785,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 update_object_cbuffer(render_ctx);
 
-                draw_main(render_ctx);
+                draw_main(render_ctx, g_smap);
 
             } else {
                 Sleep(100);
