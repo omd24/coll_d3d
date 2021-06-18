@@ -51,9 +51,9 @@
 #define NUM_QUEUING_FRAMES      3
 
 #if defined(ENABLE_DEARIMGUI)
-bool global_imgui_enabled = true;
+bool g_imgui_enabled = true;
 #else
-bool global_imgui_enabled = false;
+bool g_imgui_enabled = false;
 #endif // defined(ENABLE_DEARIMGUI)
 
 enum RENDER_LAYER : int {
@@ -170,14 +170,30 @@ struct SceneContext {
     UINT width;
     UINT height;
     float aspect_ratio;
+
+    //
+    // Light data for dynamic shadow
+    float light_nearz;
+    float light_farz;
+    XMFLOAT3 light_pos_w;
+    XMFLOAT4X4 light_view_mat;
+    XMFLOAT4X4 light_proj_mat;
+    XMFLOAT4X4 shadow_transform;
+
+    float light_rotation_angle;
+    XMFLOAT3 base_light_dirs[3];
+    XMFLOAT3 rotated_light_dirs[3];
+
+    DirectX::BoundingSphere scene_bounds;
 };
 
-Camera * global_camera;
-GameTimer global_timer;
-bool global_paused;
-bool global_resizing;
-bool global_mouse_active;
-SceneContext global_scene_ctx;
+Camera * g_camera;
+ShadowMap * g_smap;
+GameTimer g_timer;
+bool g_paused;
+bool g_resizing;
+bool g_mouse_active;
+SceneContext g_scene_ctx;
 
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
@@ -216,8 +232,15 @@ struct D3DRenderContext {
     ID3D12DescriptorHeap *          srv_heap;
 
     UINT                            sky_tex_heap_index;
+    UINT                            shadow_map_heap_index;
+
+    UINT                            null_cube_srv_index;
+    UINT                            null_tex_srv_index;
+    D3D12_GPU_DESCRIPTOR_HANDLE     null_srv;
 
     PassConstants                   main_pass_constants;
+    PassConstants                   shadow_pass_constants;
+
     UINT                            pass_cbv_offset;
 
     // List of all the render items.
@@ -1335,29 +1358,29 @@ handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
     float dt = gt->delta_time;
 
     if (GetAsyncKeyState('W') & 0x8000)
-        Camera_Walk(global_camera, 10.0f * dt);
+        Camera_Walk(g_camera, 10.0f * dt);
 
     if (GetAsyncKeyState('S') & 0x8000)
-        Camera_Walk(global_camera, -10.0f * dt);
+        Camera_Walk(g_camera, -10.0f * dt);
 
     if (GetAsyncKeyState('A') & 0x8000)
-        Camera_Strafe(global_camera, -10.0f * dt);
+        Camera_Strafe(g_camera, -10.0f * dt);
 
     if (GetAsyncKeyState('D') & 0x8000)
-        Camera_Strafe(global_camera, 10.0f * dt);
+        Camera_Strafe(g_camera, 10.0f * dt);
 
-    Camera_UpdateViewMatrix(global_camera);
+    Camera_UpdateViewMatrix(g_camera);
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
-    if (global_mouse_active) {
+    if (g_mouse_active) {
         if ((wParam & MK_LBUTTON) != 0) {
             // make each pixel correspond to a quarter of a degree
             float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
             float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-            Camera_Pitch(global_camera, dy);
-            Camera_RotateY(global_camera, dx);
+            Camera_Pitch(g_camera, dy);
+            Camera_RotateY(g_camera, dx);
         }
     }
     scene_ctx->mouse.x = x;
@@ -1430,8 +1453,8 @@ update_mat_buffer (D3DRenderContext * render_ctx) {
 static void
 update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 
-    XMMATRIX view = Camera_GetView(global_camera);
-    XMMATRIX proj = Camera_GetProj(global_camera);
+    XMMATRIX view = Camera_GetView(g_camera);
+    XMMATRIX proj = Camera_GetProj(g_camera);
 
     XMMATRIX view_proj = XMMatrixMultiply(view, proj);
     XMVECTOR det_view = XMMatrixDeterminant(view);
@@ -1441,31 +1464,102 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMVECTOR det_view_proj = XMMatrixDeterminant(view_proj);
     XMMATRIX inv_view_proj = XMMatrixInverse(&det_view_proj, view_proj);
 
+    XMMATRIX shadow_transform = XMLoadFloat4x4(&g_scene_ctx.shadow_transform);
+
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view, XMMatrixTranspose(view));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_view, XMMatrixTranspose(inv_view));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.proj, XMMatrixTranspose(proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_proj, XMMatrixTranspose(inv_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_view_proj, XMMatrixTranspose(inv_view_proj));
-    render_ctx->main_pass_constants.eye_posw = Camera_GetPosition3f(global_camera);
+    XMStoreFloat4x4(&render_ctx->main_pass_constants.shadow_transform, XMMatrixTranspose(shadow_transform));
+    render_ctx->main_pass_constants.eye_posw = Camera_GetPosition3f(g_camera);
 
-    render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)global_scene_ctx.width, (float)global_scene_ctx.height);
-    render_ctx->main_pass_constants.inv_render_target_size = XMFLOAT2(1.0f / global_scene_ctx.width, 1.0f / global_scene_ctx.height);
+    render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)g_scene_ctx.width, (float)g_scene_ctx.height);
+    render_ctx->main_pass_constants.inv_render_target_size = XMFLOAT2(1.0f / g_scene_ctx.width, 1.0f / g_scene_ctx.height);
     render_ctx->main_pass_constants.nearz = 1.0f;
     render_ctx->main_pass_constants.farz = 1000.0f;
     render_ctx->main_pass_constants.delta_time = timer->delta_time;
     render_ctx->main_pass_constants.total_time = Timer_GetTotalTime(timer);
     render_ctx->main_pass_constants.ambient_light = {.25f, .25f, .35f, 1.0f};
 
-    render_ctx->main_pass_constants.lights[0].direction = {0.57735f, -0.57735f, 0.57735f};
-    render_ctx->main_pass_constants.lights[0].strength = {0.6f, 0.6f, 0.6f};
-    render_ctx->main_pass_constants.lights[1].direction = {-0.57735f, -0.57735f, 0.57735f};
-    render_ctx->main_pass_constants.lights[1].strength = {0.3f, 0.3f, 0.3f};
-    render_ctx->main_pass_constants.lights[2].direction = {0.0f, -0.707f, -0.707f};
-    render_ctx->main_pass_constants.lights[2].strength = {0.15f, 0.15f, 0.15f};
+    render_ctx->main_pass_constants.lights[0].direction = g_scene_ctx.rotated_light_dirs[0];
+    render_ctx->main_pass_constants.lights[0].strength = {0.9f, 0.8f, 0.7f};
+    render_ctx->main_pass_constants.lights[1].direction = g_scene_ctx.rotated_light_dirs[1];
+    render_ctx->main_pass_constants.lights[1].strength = {0.4f, 0.4f, 0.4f};
+    render_ctx->main_pass_constants.lights[2].direction = g_scene_ctx.rotated_light_dirs[2];
+    render_ctx->main_pass_constants.lights[2].strength = {0.2f, 0.2f, 0.2f};
 
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr;
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
+}
+static void
+update_shadow_transform (GameTimer * timer) {
+    // Only the first "main" light casts a shadow.
+    XMVECTOR light_dir = XMLoadFloat3(&g_scene_ctx.rotated_light_dirs[0]);
+    XMVECTOR light_pos = -2.0f * g_scene_ctx.scene_bounds.Radius * light_dir;
+    XMVECTOR target_pos = XMLoadFloat3(&g_scene_ctx.scene_bounds.Center);
+    XMVECTOR light_up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    XMMATRIX light_view = XMMatrixLookAtLH(light_pos, target_pos, light_up);
+
+    XMStoreFloat3(&g_scene_ctx.light_pos_w, light_pos);
+
+    // Transform bounding sphere to light space.
+    XMFLOAT3 sphere_center_light_space;
+    XMStoreFloat3(&sphere_center_light_space, XMVector3TransformCoord(target_pos, light_view));
+
+    // Ortho frustum in light space encloses scene.
+    float l = sphere_center_light_space.x - g_scene_ctx.scene_bounds.Radius;
+    float b = sphere_center_light_space.y - g_scene_ctx.scene_bounds.Radius;
+    float n = sphere_center_light_space.z - g_scene_ctx.scene_bounds.Radius;
+    float r = sphere_center_light_space.x + g_scene_ctx.scene_bounds.Radius;
+    float t = sphere_center_light_space.y + g_scene_ctx.scene_bounds.Radius;
+    float f = sphere_center_light_space.z + g_scene_ctx.scene_bounds.Radius;
+
+    g_scene_ctx.light_nearz = n;
+    g_scene_ctx.light_farz = f;
+    XMMATRIX light_proj = XMMatrixOrthographicOffCenterLH(l, r, b, t, n, f);
+
+    // Transform NDC space [-1,+1]^2 to texture space [0,1]^2
+    XMMATRIX T(
+        0.5f, 0.0f, 0.0f, 0.0f,
+        0.0f, -0.5f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.5f, 0.5f, 0.0f, 1.0f
+    );
+
+    XMMATRIX S = light_view * light_proj * T;
+    XMStoreFloat4x4(&g_scene_ctx.light_view_mat, light_view);
+    XMStoreFloat4x4(&g_scene_ctx.light_proj_mat, light_proj);
+    XMStoreFloat4x4(&g_scene_ctx.shadow_transform, S);
+}
+static void
+update_shadow_pass_cb(ShadowMap * smap, D3DRenderContext * render_ctx, GameTimer * timer) {
+    XMMATRIX view = XMLoadFloat4x4(&g_scene_ctx.light_view_mat);
+    XMMATRIX proj = XMLoadFloat4x4(&g_scene_ctx.light_proj_mat);
+
+    XMMATRIX view_proj = XMMatrixMultiply(view, proj);
+    XMMATRIX inv_view = XMMatrixInverse(&XMMatrixDeterminant(view), view);
+    XMMATRIX inv_proj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
+    XMMATRIX inv_view_proj = XMMatrixInverse(&XMMatrixDeterminant(view_proj), view_proj);
+
+    UINT w = smap->width;
+    UINT h = smap->height;
+
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.view, XMMatrixTranspose(view));
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.inv_view, XMMatrixTranspose(inv_view));
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.proj, XMMatrixTranspose(proj));
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.inv_proj, XMMatrixTranspose(inv_proj));
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.view_proj, XMMatrixTranspose(view_proj));
+    XMStoreFloat4x4(&render_ctx->shadow_pass_constants.inv_view_proj, XMMatrixTranspose(inv_view_proj));
+    render_ctx->shadow_pass_constants.eye_posw = g_scene_ctx.light_pos_w;
+    render_ctx->shadow_pass_constants.render_target_size= XMFLOAT2((float)w, (float)h);
+    render_ctx->shadow_pass_constants.inv_render_target_size= XMFLOAT2(1.0f / w, 1.0f / h);
+    render_ctx->shadow_pass_constants.nearz= g_scene_ctx.light_nearz;
+    render_ctx->shadow_pass_constants.farz= g_scene_ctx.light_farz;
+
+    uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr + sizeof(PassConstants);
+    memcpy(pass_ptr, &render_ctx->shadow_pass_constants, sizeof(PassConstants));
 }
 static void
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
@@ -1517,7 +1611,8 @@ flush_command_queue (D3DRenderContext * render_ctx) {
 }
 static HRESULT
 draw_main (D3DRenderContext * render_ctx) {
-    HRESULT ret = E_FAIL;
+    ... smap stuff
+        HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
     ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
@@ -1598,7 +1693,7 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->environment_ritems
     );
 
-    if (global_imgui_enabled)
+    if (g_imgui_enabled)
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
 // -- indicate that the backbuffer will now be used to present
@@ -1633,6 +1728,26 @@ SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
     scene_ctx->sun_theta = 1.25f * XM_PI;
     scene_ctx->sun_phi = XM_PIDIV4;
     scene_ctx->aspect_ratio = (float)scene_ctx->width / (float)scene_ctx->height;
+
+    // Estimate the scene bounding sphere manually since we know how the scene was constructed.
+    // The grid is the "widest object" with a width of 20 and depth of 30.0f, and centered at
+    // the world space origin.  In general, you need to loop over every world space vertex
+    // position and compute the bounding sphere.
+    scene_ctx->scene_bounds.Center = XMFLOAT3(0.0f, 0.0f, 0.0f);
+    scene_ctx->scene_bounds.Radius = sqrtf(10.0f * 10.0f + 15.0f * 15.0f);
+
+    //
+    // Light data for dynamic shadow
+    scene_ctx->light_nearz = 0.0f;
+    scene_ctx->light_farz = 0.0f;
+    scene_ctx->light_view_mat = Identity4x4();
+    scene_ctx->light_proj_mat = Identity4x4();
+    scene_ctx->shadow_transform = Identity4x4();
+
+    scene_ctx->light_rotation_angle = 0.0f;
+    scene_ctx->base_light_dirs[0] = XMFLOAT3(0.57735f, -0.57735f, 0.57735f);
+    scene_ctx->base_light_dirs[1] = XMFLOAT3(-0.57735f, -0.57735f, 0.57735f);
+    scene_ctx->base_light_dirs[2] = XMFLOAT3(0.0f, -0.707f, -0.707f);
 }
 static void
 RenderContext_Init (D3DRenderContext * render_ctx) {
@@ -1641,14 +1756,14 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
 
     render_ctx->viewport.TopLeftX = 0;
     render_ctx->viewport.TopLeftY = 0;
-    render_ctx->viewport.Width = (float)global_scene_ctx.width;
-    render_ctx->viewport.Height = (float)global_scene_ctx.height;
+    render_ctx->viewport.Width = (float)g_scene_ctx.width;
+    render_ctx->viewport.Height = (float)g_scene_ctx.height;
     render_ctx->viewport.MinDepth = 0.0f;
     render_ctx->viewport.MaxDepth = 1.0f;
     render_ctx->scissor_rect.left = 0;
     render_ctx->scissor_rect.top = 0;
-    render_ctx->scissor_rect.right = global_scene_ctx.width;
-    render_ctx->scissor_rect.bottom = global_scene_ctx.height;
+    render_ctx->scissor_rect.right = g_scene_ctx.width;
+    render_ctx->scissor_rect.bottom = g_scene_ctx.height;
 
     // -- initialize fog data
     render_ctx->main_pass_constants.fog_color = {0.7f, 0.7f, 0.7f, 1.0f};
@@ -1736,8 +1851,8 @@ calculate_frame_stats (GameTimer * timer, float * out_fps, float * out_mspf) {
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx) {
-    int w = global_scene_ctx.width;
-    int h = global_scene_ctx.height;
+    int w = g_scene_ctx.width;
+    int h = g_scene_ctx.height;
 
     if (render_ctx &&
         render_ctx->device &&
@@ -1837,17 +1952,17 @@ d3d_resize (D3DRenderContext * render_ctx) {
         render_ctx->scissor_rect = {0, 0, w, h};
 
         // The window resized, so update the aspect ratio
-        global_scene_ctx.aspect_ratio = static_cast<float>(w) / h;
+        g_scene_ctx.aspect_ratio = static_cast<float>(w) / h;
     }
 
-    Camera_SetLens(global_camera, 0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
+    Camera_SetLens(g_camera, 0.25f * XM_PI, g_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
 }
 static void
 check_active_item () {
     if (ImGui::IsItemActive() || ImGui::IsItemHovered())
-        global_mouse_active = false;
+        g_mouse_active = false;
     else
-        global_mouse_active = true;
+        g_mouse_active = true;
 }
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -1874,11 +1989,11 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     case WM_ACTIVATE: {
         if (LOWORD(wParam) == WA_INACTIVE) {
-            global_paused = true;
-            Timer_Stop(&global_timer);
+            g_paused = true;
+            Timer_Stop(&g_timer);
         } else {
-            global_paused = false;
-            Timer_Start(&global_timer);
+            g_paused = false;
+            Timer_Start(&g_timer);
         }
     } break;
 
@@ -1887,7 +2002,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_RBUTTONDOWN: {
         _ASSERT_EXPR(_render_ctx, _T("Uninitialized render context!"));
         handle_mouse_down(
-            &global_scene_ctx,
+            &g_scene_ctx,
             wParam,
             GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
             hwnd,
@@ -1901,20 +2016,20 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         ReleaseCapture();
     } break;
     case WM_MOUSEMOVE: {
-        handle_mouse_move(&global_scene_ctx, wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        handle_mouse_move(&g_scene_ctx, wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
     } break;
     case WM_SIZE: {
-        global_scene_ctx.width = LOWORD(lParam);
-        global_scene_ctx.height = HIWORD(lParam);
+        g_scene_ctx.width = LOWORD(lParam);
+        g_scene_ctx.height = HIWORD(lParam);
         if (_render_ctx) {
             if (wParam == SIZE_MINIMIZED) {
-                global_paused = true;
+                g_paused = true;
             } else if (wParam == SIZE_MAXIMIZED) {
-                global_paused = false;
+                g_paused = false;
                 d3d_resize(_render_ctx);
             } else if (wParam == SIZE_RESTORED) {
                 // TODO(omid): handle restore from minimize/maximize 
-                if (global_resizing) {
+                if (g_resizing) {
                     // don't do nothing until resizing finished
                 } else {
                     d3d_resize(_render_ctx);
@@ -1924,16 +2039,16 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     } break;
     // WM_EXITSIZEMOVE is sent when the user grabs the resize bars.
     case WM_ENTERSIZEMOVE: {
-        global_paused = true;
-        global_resizing  = true;
-        Timer_Stop(&global_timer);
+        g_paused = true;
+        g_resizing  = true;
+        Timer_Stop(&g_timer);
     } break;
     // WM_EXITSIZEMOVE is sent when the user releases the resize bars.
     // Here we reset everything based on the new window dimensions.
     case WM_EXITSIZEMOVE: {
-        global_paused = false;
-        global_resizing  = false;
-        Timer_Start(&global_timer);
+        g_paused = false;
+        g_resizing  = false;
+        Timer_Start(&g_timer);
         d3d_resize(_render_ctx);
     } break;
     case WM_DESTROY: {
@@ -1955,15 +2070,15 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 1280, 720);
+    SceneContext_Init(&g_scene_ctx, 1280, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
     // Camera Initial Setup
     size_t cam_size = Camera_CalculateRequiredSize();
-    global_camera = (Camera *)malloc(cam_size);
-    Camera_Init(global_camera);
-    Camera_SetPosition(global_camera, 0.0f, 2.0f, -15.0f);
+    g_camera = (Camera *)malloc(cam_size);
+    Camera_Init(g_camera);
+    Camera_SetPosition(g_camera, 0.0f, 2.0f, -15.0f);
 
     // ========================================================================================================
 #pragma region Windows_Setup
@@ -1976,7 +2091,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     _ASSERT_EXPR(RegisterClass(&wc), _T("could not register window class"));
 
     // Compute window rectangle dimensions based on requested client area dimensions.
-    RECT R = {0, 0, (long int)global_scene_ctx.width, (long int)global_scene_ctx.height};
+    RECT R = {0, 0, (long int)g_scene_ctx.width, (long int)g_scene_ctx.height};
     AdjustWindowRect(&R, WS_OVERLAPPEDWINDOW, false);
     int width  = R.right - R.left;
     int height = R.bottom - R.top;
@@ -2044,6 +2159,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // store RTV descriptor increment size
     render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    //
+    // Shadow Map Setup
+    g_smap = (ShadowMap *)malloc(sizeof(ShadowMap));
+    ShadowMap_Init(g_smap, render_ctx->device, 2048, 2048, DXGI_FORMAT_R24G8_TYPELESS);
+
+
+
+    //
     // Check 4X MSAA quality support for our back buffer format.
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS quality_levels;
     quality_levels.Format = render_ctx->backbuffer_format;
@@ -2087,8 +2210,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
     DXGI_MODE_DESC backbuffer_desc = {};
-    backbuffer_desc.Width = global_scene_ctx.width;
-    backbuffer_desc.Height = global_scene_ctx.height;
+    backbuffer_desc.Width = g_scene_ctx.width;
+    backbuffer_desc.Height = g_scene_ctx.height;
     backbuffer_desc.Format = render_ctx->backbuffer_format;
     backbuffer_desc.RefreshRate.Numerator = 60;
     backbuffer_desc.RefreshRate.Denominator = 1;
@@ -2209,8 +2332,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     D3D12_RESOURCE_DESC ds_desc;
     ds_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     ds_desc.Alignment = 0;
-    ds_desc.Width = global_scene_ctx.width;
-    ds_desc.Height = global_scene_ctx.height;
+    ds_desc.Width = g_scene_ctx.width;
+    ds_desc.Height = g_scene_ctx.height;
     ds_desc.DepthOrArraySize = 1;
     ds_desc.MipLevels = 1;
 
@@ -2290,7 +2413,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].material_ptr, &render_ctx->frame_resources[i].material_sbuffer);
 
-        create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
+        create_upload_buffer(render_ctx->device, pass_cb_size * 2, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
     }
 #pragma endregion
 
@@ -2357,7 +2480,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGuiWindowFlags window_flags = 0;
     bool beginwnd;
     int selected_mat = 0;
-    if (global_imgui_enabled) {
+    if (g_imgui_enabled) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO(); (void)io;
@@ -2400,11 +2523,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // ========================================================================================================
 #pragma region Main_Loop
-    global_paused = false;
-    global_resizing = false;
-    global_mouse_active = true;
-    Timer_Init(&global_timer);
-    Timer_Reset(&global_timer);
+    g_paused = false;
+    g_resizing = false;
+    g_mouse_active = true;
+    Timer_Init(&g_timer);
+    Timer_Reset(&g_timer);
 
     MSG msg = {};
     while (msg.message != WM_QUIT) {
@@ -2413,7 +2536,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             DispatchMessageA(&msg);
         } else {
 #pragma region Imgui window
-            if (global_imgui_enabled) {
+            if (g_imgui_enabled) {
                 ImGui_ImplDX12_NewFrame();
                 ImGui_ImplWin32_NewFrame();
                 ImGui::NewFrame();
@@ -2442,17 +2565,32 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                     render_ctx->sky_tex_heap_index = TEX_SKY_CUBEMAP3;
 
                 // control mouse activation
-                global_mouse_active = !(beginwnd);
+                g_mouse_active = !(beginwnd);
             }
 #pragma endregion
-            Timer_Tick(&global_timer);
+            Timer_Tick(&g_timer);
 
-            if (!global_paused) {
+            if (!g_paused) {
                 move_to_next_frame(render_ctx, &render_ctx->frame_index);
 
-                handle_keyboard_input(&global_scene_ctx, &global_timer);
+                //
+                // Animate the lights (and hence shadows).
+                g_scene_ctx.light_rotation_angle += 0.1f * g_timer.delta_time;
+                XMMATRIX R = XMMatrixRotationY(g_scene_ctx.light_rotation_angle);
+                for (int i = 0; i < 3; ++i) {
+                    XMVECTOR light_dir = XMLoadFloat3(&g_scene_ctx.base_light_dirs[i]);
+                    light_dir = XMVector3TransformNormal(light_dir, R);
+                    XMStoreFloat3(&g_scene_ctx.rotated_light_dirs[i], light_dir);
+                }
+
+                handle_keyboard_input(&g_scene_ctx, &g_timer);
                 update_mat_buffer(render_ctx);
-                update_pass_cbuffers(render_ctx, &global_timer);
+
+                update_pass_cbuffers(render_ctx, &g_timer);
+
+                update_shadow_transform(&g_timer);
+                update_shadow_pass_cb(g_smap, render_ctx, &g_timer);
+
                 update_object_cbuffer(render_ctx);
 
                 draw_main(render_ctx);
@@ -2469,7 +2607,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     flush_command_queue(render_ctx);
 
     // Cleanup Imgui
-    if (global_imgui_enabled) {
+    if (g_imgui_enabled) {
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
@@ -2557,7 +2695,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         dxgiGetDebugInterface = dxgiGetDebugInterface;
     }
 
-    ::free(global_camera);
+    ShadowMap_Deinit(g_smap);
+    ::free(g_smap);
+
+    ::free(g_camera);
 
 #pragma endregion Cleanup_And_Debug
 

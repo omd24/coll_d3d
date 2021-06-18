@@ -48,6 +48,7 @@ struct PassConstants {
     XMFLOAT4X4 inv_proj;
     XMFLOAT4X4 view_proj;
     XMFLOAT4X4 inv_view_proj;
+    XMFLOAT4X4 shadow_transform;
     XMFLOAT3 eye_posw;
     float cbuffer_per_obj_pad1;
     XMFLOAT2 render_target_size;
@@ -69,9 +70,9 @@ struct PassConstants {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light lights[MAX_LIGHTS];
 
-    float padding[8];  // Padding so the constant buffer is 256-byte aligned
+    float padding[56];  // Padding so the constant buffer is 256-byte aligned
 };
-static_assert(1280 == sizeof(PassConstants), "Constant buffer size must be 256b aligned");
+static_assert(1536 == sizeof(PassConstants), "Constant buffer size must be 256b aligned");
 
 struct MaterialData {
     XMFLOAT4    diffuse_albedo;
