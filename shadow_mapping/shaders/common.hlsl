@@ -23,8 +23,9 @@ struct MaterialData {
 };
 
 TextureCube g_cubemap : register(t0);
+TextureCube g_smap : register(t1);
 
-Texture2D g_tex_maps[10] : register(t1);
+Texture2D g_tex_maps[10] : register(t2);
 
 StructuredBuffer<MaterialData> g_mat_data : register(t0, space1);
 
@@ -34,8 +35,9 @@ SamplerState g_sam_linear_wrap : register(s2);
 SamplerState g_sam_linear_clamp : register(s3);
 SamplerState g_sam_anisotropic_wrap : register(s4);
 SamplerState g_sam_anisotropic_clamp : register(s5);
+SamplerState g_sam_shadow : register(s6);
 
-cbuffer PerObjBuffer : register(b0) {
+cbuffer PerObjBuffer : register(b0){
     float4x4 g_world;
     float4x4 g_tex_transform;
     uint g_mat_index;
@@ -51,6 +53,7 @@ cbuffer PerPassConstantBuffer : register(b1){
     float4x4 g_inv_proj;
     float4x4 g_view_proj;
     float4x4 g_inv_view_proj;
+    float4x4 g_shadow_transform;
     float3 g_eye_pos_w;
     float cb_per_obj_padding1;
     float2 g_render_target_size;
@@ -97,4 +100,36 @@ normal_sample_to_world_space (float3 nmap_sample, float3 unit_normal_w, float3 t
     float3 bumped_normal_w = mul(normal_t, TBN);
 
     return bumped_normal_w;
+}
+//
+// PCF for shadow mapping
+float
+calc_shadow_factor (float4 shadow_pos_h) {
+    // complete the projection by doing the division bt w
+    shadow_pos_h.xyz /= shadow_pos_h.w;
+    
+    // store depth in NDC space
+    float depth = shadow_pos_h.z;
+    
+    uint width, height, num_mips;
+    g_smap.GetDimensions(0, width, height, num_mips);
+    
+    // texel size [0,1]
+    float dx = 1.0f / (float)width;
+    
+    float percent_lit = 0.0f;
+    float2 offsets[9] = {
+        float2(-dx, -dx), float2(0.0f, -dx), float2(dx, -dx),
+        float2(-dx, 0.0f), float2(0.0f, 0.0f), float2(dx, 0.0f),
+        float2(-dx, dx), float2(0.0f, dx), float2(dx, dx)
+    };
+    
+    [unroll]
+    for (int i = 0; i < 9; ++i) {
+        percent_lit += g_smap.SampleCmpLevelZero(
+            g_sam_shadow, shadow_pos_h.xy + offsets[i], depth
+        ).r;
+    }
+    
+    return percent_lit / 9.0f;  // averaging over shadow map algorithm's results
 }

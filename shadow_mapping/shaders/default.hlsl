@@ -17,8 +17,9 @@ struct VertIn {
     float3 tangent_u : TANGENT;
 };
 struct VertOut {
-    float4 pos_homogenous_clip_space : SV_Position;
-    float3 pos_world : Position;
+    float4 pos_h : SV_Position;
+    float4 shadow_pos_h : POSITION0;
+    float3 pos_world : Position1;
     float3 normal_world : NORMAL;
     float3 tangent_world : TANGENT;
     float2 texc : TEXCOORD;
@@ -40,12 +41,15 @@ VertexShader_Main (VertIn vin, uint instance_id : SV_InstanceID) {
     ret.tangent_world = mul(vin.tangent_u, (float3x3)g_world);
 
     // transform to homogenous clip space
-    ret.pos_homogenous_clip_space = mul(pos_world, g_view_proj);
+    ret.pos_h = mul(pos_world, g_view_proj);
 
     // output vertex attributes for interpolation across triangle
     float4 texc = mul(float4(vin.texc, 0.0f, 1.0f), g_tex_transform);
     ret.texc = mul(texc, mat_data.mat_transform).xy;
 
+    // generate projective tex-coords to project shadow map onto the scene
+    ret.shadow_pos_h = mul(pos_world, g_shadow_transform);
+    
     return ret;
 }
 float4
@@ -85,9 +89,14 @@ PixelShader_Main (VertOut pin) : SV_Target{
     // indirect lighting
     float4 ambient = g_ambient_light * diffuse_albedo;
 
+    //
+    // calculate shadow factor
+    // only the first light casts a shadow
+    float3 shadow_factor = float3(1.0f, 1.0f, 1.0f);
+    shadow_factor[0] = calc_shadow_factor(pin.shadow_pos_h);
+    
     const float shininess = (1.0f - roughness) * nmap_sample.a;
     Material mat = {diffuse_albedo, fresnel_r0, shininess};
-    float3 shadow_factor = 1.0f;
     float4 direct_light = compute_lighting(
         g_lights, mat, pin.pos_world, bumped_normal_w, to_eye, shadow_factor
     );
