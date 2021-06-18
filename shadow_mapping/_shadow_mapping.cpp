@@ -798,7 +798,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_GLOBE];
 
     // skull
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f)*XMMatrixTranslation(0.0f, 1.0f, 0.0f));
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
     render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
     render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 4;
     render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
@@ -933,6 +933,46 @@ draw_render_items (
         }
     }
 }
+//
+// shadow map heap indices book-keeping
+static void
+shadow_map_bookkeeping (ShadowMap * smap, D3DRenderContext * render_ctx, int smap_heap_index_offset) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv_desc.Texture2D.MostDetailedMip = 0;
+    srv_desc.Texture2D.MipLevels = 1;
+    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    render_ctx->shadow_map_heap_index = render_ctx->sky_tex_heap_index + smap_heap_index_offset;
+    render_ctx->null_cube_srv_index = render_ctx->shadow_map_heap_index + 1;
+    render_ctx->null_tex_srv_index = render_ctx->null_cube_srv_index + 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    render_ctx->null_srv = null_srv_gpu;
+
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+    null_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
+
+    ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
+}
 static void
 create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     _ASSERT_EXPR(render_ctx->cbv_srv_uav_descriptor_size > 0, _T("invalid descriptor size value"));
@@ -942,7 +982,7 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     srv_heap_desc.NumDescriptors =
         _COUNT_TEX
         + 4 /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
-        + 1 /* DearImGui*/;
+        + 1 /* DearImGui */;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -1048,40 +1088,8 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
 
     //
-    // shadow map
-    render_ctx->shadow_map_heap_index = TEX_SKY_CUBEMAP3 + 1;
-
-    render_ctx->null_cube_srv_index = render_ctx->shadow_map_heap_index + 1;
-    render_ctx->null_tex_srv_index = render_ctx->null_cube_srv_index + 1;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
-
-    D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
-
-    render_ctx->null_srv = null_srv_gpu;
-
-    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
-    null_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size;
-
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = 1;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
-
-    D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
-
-    ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
+    // shadow map heap indices book-keeping
+    shadow_map_bookkeeping(smap, render_ctx, 4);
 }
 static void
 get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
@@ -1199,23 +1207,41 @@ get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
 }
 static void
 create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
+
+#if 0   // fancy way of offsetting sky cubemap and shadow map descriptors
     // -- sky cube map (t0) and shdow map (t1)
     D3D12_DESCRIPTOR_RANGE tex_table0 = {};
     tex_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     tex_table0.NumDescriptors = 2;
     tex_table0.BaseShaderRegister = 0;  //t0 and t1 will be used
     tex_table0.RegisterSpace = 0;       //space0
+    tex_table0.OffsetInDescriptorsFromTableStart = 3;
+#endif // 0
+    // -- sky cube map (t0)
+    D3D12_DESCRIPTOR_RANGE tex_table0 = {};
+    tex_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table0.NumDescriptors = 1;
+    tex_table0.BaseShaderRegister = 0;  //t0 will be used
+    tex_table0.RegisterSpace = 0;       //space0
     tex_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // -- rest of textures
+    // -- shadow map (t1)
     D3D12_DESCRIPTOR_RANGE tex_table1 = {};
     tex_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    tex_table1.NumDescriptors = _COUNT_TEX;
-    tex_table1.BaseShaderRegister = 2;  //t2
+    tex_table1.NumDescriptors = 1;
+    tex_table1.BaseShaderRegister = 1;  //t1
     tex_table1.RegisterSpace = 0;       //space0
     tex_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER slot_root_params[5] = {};
+    // -- rest of textures
+    D3D12_DESCRIPTOR_RANGE tex_table2 = {};
+    tex_table2.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table2.NumDescriptors = _COUNT_TEX;
+    tex_table2.BaseShaderRegister = 2;  //t2
+    tex_table2.RegisterSpace = 0;       //space0
+    tex_table2.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[6] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     // -- obj cbuffer
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -1241,11 +1267,17 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table0;
     slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // -- textures
+    // -- sky cubemap texture
     slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
     slot_root_params[4].DescriptorTable.pDescriptorRanges = &tex_table1;
     slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // -- textures
+    slot_root_params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[5].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[5].DescriptorTable.pDescriptorRanges = &tex_table2;
+    slot_root_params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
     get_static_samplers(samplers);
@@ -1821,9 +1853,13 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
     // bind null srv for shadow map pass
     cmdlist->SetGraphicsRootDescriptorTable(3, render_ctx->null_srv);
 
+    D3D12_GPU_DESCRIPTOR_HANDLE smap_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    smap_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+    cmdlist->SetGraphicsRootDescriptorTable(4, smap_descriptor);
+
     // Bind all textures. We only specify the first descriptor in the table
     // Root sig knows how many descriptors we have in the table
-    cmdlist->SetGraphicsRootDescriptorTable(4, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
+    cmdlist->SetGraphicsRootDescriptorTable(5, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
 
     draw_scene_to_shadow_map(smap, render_ctx);
 
@@ -1858,6 +1894,10 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
     D3D12_GPU_DESCRIPTOR_HANDLE sky_tex_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
     sky_tex_descriptor.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
     cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
+
+    //... we are not ussing smap_heap index when setting graphics root desc table. only ussing it to set smap srvs
+    // NOTE(omid): based on our root signature definition, 3rd root paramter is a descriptor table with 2 textures (cubemap and smap)
+    // so renderer uses the next tex after sky_tex_heap_index as smap automatically
 
     // 1. draw opaque objs
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
