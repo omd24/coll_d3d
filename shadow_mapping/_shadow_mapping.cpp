@@ -371,8 +371,9 @@ create_materials (Material out_materials []) {
     strcpy_s(out_materials[MAT_SKULL].name, "skull");
     out_materials[MAT_SKULL].mat_cbuffer_index = 3;
     out_materials[MAT_SKULL].diffuse_srvheap_index = WHITE1x1_DIFFUSE_MAP;
-    out_materials[MAT_SKULL].diffuse_albedo = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
-    out_materials[MAT_SKULL].fresnel_r0 = XMFLOAT3(0.2f, 0.2f, 0.2f);
+    out_materials[MAT_SKULL].normal_srvheap_index = WHITE1x1_NORMAL_MAP;
+    out_materials[MAT_SKULL].diffuse_albedo = XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f);
+    out_materials[MAT_SKULL].fresnel_r0 = XMFLOAT3(0.6f, 0.6f, 0.6f);
     out_materials[MAT_SKULL].roughness = 0.2f;
     out_materials[MAT_SKULL].mat_transform = Identity4x4();
     out_materials[MAT_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
@@ -433,21 +434,38 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
             &vertices[i].position.x, &vertices[i].position.y, &vertices[i].position.z,
             &vertices[i].normal.x, &vertices[i].normal.y, &vertices[i].normal.z
         );
+
+        // generating tangent vector
+        vertices[i].texc = {0.0f, 0.0f};
+        XMVECTOR P = XMLoadFloat3(&vertices[i].position);
+        XMVECTOR N = XMLoadFloat3(&vertices[i].normal);
+        // NOTE(omid): We aren't applying a texture map to the skull,
+        // so we just need any tangent vector
+        // so that the math works out to give us the original interpolated vertex normal.
+        XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        if (fabsf(XMVectorGetX(XMVector3Dot(N, up))) < 1.0f - 0.001f) {
+            XMVECTOR T = XMVector3Normalize(XMVector3Cross(up, N));
+            XMStoreFloat3(&vertices[i].tangent_u, T);
+        } else {
+            up = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+            XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, up));
+            XMStoreFloat3(&vertices[i].tangent_u, T);
+        }
+
         if (cnt != 6) {
             MessageBox(0, _T("Read error"), 0, 0);
             return;
         }
 
-#pragma region skull texture coordinates calculations
-        XMVECTOR P = XMLoadFloat3(&vertices[i].position);
-
+#pragma region skull texture coordinates calculations (Legacy Code)
         // Project point onto unit sphere and generate spherical texture coordinates.
+        /*XMVECTOR P = XMLoadFloat3(&vertices[i].position);
+
         XMFLOAT3 shpere_pos;
         XMStoreFloat3(&shpere_pos, XMVector3Normalize(P));
 
         float theta = atan2f(shpere_pos.z, shpere_pos.x);
 
-        // Put in [0, 2pi].
         if (theta < 0.0f)
             theta += XM_2PI;
 
@@ -456,7 +474,7 @@ create_skull_geometry (D3DRenderContext * render_ctx) {
         float u = theta / (2.0f * XM_PI);
         float v = phi / XM_PI;
 
-        vertices[i].texc = {u, v};
+        vertices[i].texc = {u, v};*/
 #pragma endregion
 
         // -- calculate vmin, vmax
@@ -791,7 +809,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_SKULL].base_vertex_loc = render_ctx->geom[GEOM_SKULL].submesh_geoms[0].base_vertex_location;
     render_ctx->all_ritems.ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
     render_ctx->all_ritems.ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = false;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].initialized = true;
     render_ctx->all_ritems.size++;
     render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_SKULL];
 
