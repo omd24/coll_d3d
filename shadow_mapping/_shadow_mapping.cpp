@@ -58,7 +58,8 @@ bool global_imgui_enabled = false;
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
-    LAYER_SKY = 1,
+    LAYER_DEBUG = 1,
+    LAYER_SKY = 2,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -67,6 +68,7 @@ enum ALL_RENDERITEMS {
     RITEM_SKY = 1,
     RITEM_BOX = 2,
     RITEM_GRID = 3,
+    ... skull
 
     // NOTE(omid): following indices are meaningless. DON'T use them! 
     RITEM_CYLENDER0 = 4,
@@ -98,6 +100,11 @@ enum SHADERS_CODE {
     SHADER_OPAQUE_PS = 1,
     SHADER_SKY_VS = 2,
     SHADER_SKY_PS = 3,
+    SHADER_SHADOW_VS = 4,
+    SHADER_SHADOW_OPAQUE_PS = 5,
+    SHADER_SHADOW_ALPHATESTED_PS = 6,
+    SHADER_DEBUG_VS = 7,
+    SHADER_DEBUG_PS = 8,
 
     _COUNT_SHADERS
 };
@@ -146,6 +153,7 @@ enum SAMPLER_INDEX {
     SAMPLER_LINEAR_CLAMP = 3,
     SAMPLER_ANISOTROPIC_WRAP = 4,
     SAMPLER_ANISOTROPIC_CLAMP = 5,
+    SAMPLER_SHADOW,
 
     _COUNT_SAMPLER
 };
@@ -1040,6 +1048,22 @@ get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
     out_samplers[SAMPLER_ANISOTROPIC_CLAMP].MaxLOD = D3D12_FLOAT32_MAX;
     out_samplers[SAMPLER_ANISOTROPIC_CLAMP].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     out_samplers[SAMPLER_ANISOTROPIC_CLAMP].RegisterSpace = 0;
+
+    // 6: SHADOW
+    out_samplers[SAMPLER_SHADOW] = {};
+    out_samplers[SAMPLER_SHADOW].ShaderRegister = 6;
+    out_samplers[SAMPLER_SHADOW].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    out_samplers[SAMPLER_SHADOW].AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    out_samplers[SAMPLER_SHADOW].AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    out_samplers[SAMPLER_SHADOW].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    out_samplers[SAMPLER_SHADOW].MipLODBias = 0.0f;
+    out_samplers[SAMPLER_SHADOW].MaxAnisotropy = 16;
+    out_samplers[SAMPLER_SHADOW].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    out_samplers[SAMPLER_SHADOW].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    out_samplers[SAMPLER_SHADOW].MinLOD = 0.f;
+    out_samplers[SAMPLER_SHADOW].MaxLOD = D3D12_FLOAT32_MAX;
+    out_samplers[SAMPLER_SHADOW].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    out_samplers[SAMPLER_SHADOW].RegisterSpace = 0;
 }
 static void
 create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
