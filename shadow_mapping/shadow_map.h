@@ -29,7 +29,7 @@ ShadowMap_Deinit (ShadowMap * smap);
 
 void
 ShadowMap_CreateDescriptors (
-    ShadowMap * rt,
+    ShadowMap * smap,
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_srv,
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_srv,
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv

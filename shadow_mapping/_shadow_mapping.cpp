@@ -225,6 +225,7 @@ struct D3DRenderContext {
     ID3D12GraphicsCommandList *     direct_cmd_list;
 
     UINT                            rtv_descriptor_size;
+    UINT                            dsv_descriptor_size;
     UINT                            cbv_srv_uav_descriptor_size;
 
     ID3D12DescriptorHeap *          rtv_heap;
@@ -865,12 +866,15 @@ draw_render_items (
     }
 }
 static void
-create_descriptor_heaps (D3DRenderContext * render_ctx) {
+create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     _ASSERT_EXPR(render_ctx->cbv_srv_uav_descriptor_size > 0, _T("invalid descriptor size value"));
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX + 1 /* DearImGui*/;
+    srv_heap_desc.NumDescriptors =
+        _COUNT_TEX
+        + 4 /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
+        + 1 /* DearImGui*/;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -965,14 +969,51 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
 
+    //
     // Create Depth Stencil View Descriptor Heap
+    // +1 DSV for shadow map
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc;
-    dsv_heap_desc.NumDescriptors = 1;
+    dsv_heap_desc.NumDescriptors = 2;
     dsv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     dsv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     dsv_heap_desc.NodeMask = 0;
     render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
 
+    //
+    // shadow map
+    render_ctx->shadow_map_heap_index = TEX_SKY_CUBEMAP3 + 1;
+
+    render_ctx->null_cube_srv_index = render_ctx->shadow_map_heap_index + 1;
+    render_ctx->null_tex_srv_index = render_ctx->null_cube_srv_index + 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    render_ctx->null_srv = null_srv_gpu;
+
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+    null_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv_desc.Texture2D.MostDetailedMip = 0;
+    srv_desc.Texture2D.MipLevels = 1;
+    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
+
+    ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
 }
 static void
 get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
@@ -1090,11 +1131,11 @@ get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
 }
 static void
 create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
-    // -- sky cube map
+    // -- sky cube map (t0) and shdow map (t1)
     D3D12_DESCRIPTOR_RANGE tex_table0 = {};
     tex_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    tex_table0.NumDescriptors = 1;
-    tex_table0.BaseShaderRegister = 0;  //t0
+    tex_table0.NumDescriptors = 2;
+    tex_table0.BaseShaderRegister = 0;  //t0 and t1 will be used
     tex_table0.RegisterSpace = 0;       //space0
     tex_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -1102,7 +1143,7 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     D3D12_DESCRIPTOR_RANGE tex_table1 = {};
     tex_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     tex_table1.NumDescriptors = _COUNT_TEX;
-    tex_table1.BaseShaderRegister = 1;  //t1
+    tex_table1.BaseShaderRegister = 2;  //t2
     tex_table1.RegisterSpace = 0;       //space0
     tex_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -2159,6 +2200,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // store RTV descriptor increment size
     render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    // store DSV descriptor increment size
+    render_ctx->dsv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+
     //
     // Shadow Map Setup
     g_smap = (ShadowMap *)malloc(sizeof(ShadowMap));
@@ -2491,13 +2536,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
         imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            0     /* no other additional descriptor for now */
+            4     /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
             ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
         imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            0     /* no other additional descriptor for now */
+            4     /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
             ));
 
             // Setup Platform/Renderer backends
