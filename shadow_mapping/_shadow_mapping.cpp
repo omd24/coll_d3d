@@ -598,7 +598,7 @@ create_shapes_geometry (D3DRenderContext * render_ctx) {
 
     GeomVertex quad_verts[_QUAD_VTX_CNT];
     uint16_t quad_indices[_QUAD_IDX_CNT];
-    create_quad(0.0f, 0.0f, 1.0f, 1.0f, 0.0f, quad_verts, quad_indices);
+    create_quad(0.5f, -0.5f, .5f, 0.5f, 0.0f, quad_verts, quad_indices);
 
     // We are concatenating all the geometry into one big vertex/index buffer.  So
     // define the regions in the buffer each submesh covers.
@@ -1908,7 +1908,7 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
     );
 
     // 2. draw debug quad
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_DEBUG]);
     draw_render_items(
         cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
@@ -2883,7 +2883,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->geom[i].vb_uploader->Release();
         render_ctx->geom[i].vb_gpu->Release();
         render_ctx->geom[i].ib_gpu->Release();
-    }   // is this a bug in d3d12sdklayers.dll ?
+    }
 
     for (int i = 0; i < _COUNT_RENDERCOMPUTE_LAYER; ++i)
         render_ctx->psos[i]->Release();
@@ -2907,6 +2907,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->textures[i].upload_heap->Release();
         render_ctx->textures[i].resource->Release();
     }
+
+    ShadowMap_Deinit(g_smap);
+    ::free(g_smap);
 
     //render_ctx->swapchain3->Release();
     render_ctx->swapchain->Release();
@@ -2944,9 +2947,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // -- consume var to avoid warning
         dxgiGetDebugInterface = dxgiGetDebugInterface;
     }
-
-    ShadowMap_Deinit(g_smap);
-    ::free(g_smap);
 
     ::free(g_camera);
 
