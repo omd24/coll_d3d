@@ -24,8 +24,9 @@ struct MaterialData {
 
 TextureCube g_cubemap : register(t0);
 Texture2D g_smap : register(t1);
+Texture2D g_ssao_map : register(t2);
 
-Texture2D g_tex_maps[10] : register(t2);
+Texture2D g_tex_maps[10] : register(t3);
 
 StructuredBuffer<MaterialData> g_mat_data : register(t0, space1);
 
@@ -53,6 +54,7 @@ cbuffer PerPassConstantBuffer : register(b1){
     float4x4 g_inv_proj;
     float4x4 g_view_proj;
     float4x4 g_inv_view_proj;
+    float4x4 g_view_proj_tex;
     float4x4 g_shadow_transform;
     float3 g_eye_pos_w;
     float cb_per_obj_padding1;

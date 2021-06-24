@@ -19,6 +19,7 @@ struct VertIn {
 struct VertOut {
     float4 pos_h : SV_Position;
     float4 shadow_pos_h : POSITION0;
+    float4 ssao_pos_h : POSITION1;
     float3 pos_world : Position1;
     float3 normal_world : NORMAL;
     float3 tangent_world : TANGENT;
@@ -46,6 +47,9 @@ VertexShader_Main (VertIn vin, uint instance_id : SV_InstanceID) {
     // output vertex attributes for interpolation across triangle
     float4 texc = mul(float4(vin.texc, 0.0f, 1.0f), g_tex_transform);
     ret.texc = mul(texc, mat_data.mat_transform).xy;
+
+    // generate projectvie tex-coords to project SSAO map onto scene
+    ret.ssao_pos_h = mul(pos_world, g_view_proj_tex);
 
     // generate projective tex-coords to project shadow map onto the scene
     ret.shadow_pos_h = mul(pos_world, g_shadow_transform);
@@ -86,8 +90,14 @@ PixelShader_Main (VertOut pin) : SV_Target{
     float dist_to_eye = length(to_eye);
     to_eye /= dist_to_eye; // normalize
 
-    // indirect lighting
-    float4 ambient = g_ambient_light * diffuse_albedo;
+    //
+    // using the ambient map
+    // -- finish texture projection and sample SSAO map
+    pin.ssao_pos_h /= pin.ssao_pos_h.w;
+    float ambient_access = g_ssao_map.Sample(g_sam_linear_clamp, pin.ssao_pos_h.xy, 0.0f).r;
+    
+    // -- apply accessiblity to indirect light term
+    float4 ambient = ambient_access * g_ambient_light * diffuse_albedo;
 
     //
     // calculate shadow factor
