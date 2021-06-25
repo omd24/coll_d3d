@@ -18,7 +18,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="_ssao.cpp">
+    <ClCompile Include="_main_ssao_demo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\externals\imgui\imgui.cpp">
@@ -45,6 +45,9 @@
     <ClCompile Include="shadow_map.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ssao.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="camera.h">
@@ -67,6 +70,9 @@
     </ClInclude>
     <ClInclude Include="headers\utils.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ssao.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -1,5 +1,5 @@
 /* ===========================================================
-   #File: _ssao.cpp #
+   #File: _main_ssao_demo.cpp #
    #Date: 24 June 2021 #
    #Revision: 1.0 #
    #Creator: Omid Miresmaeili #
@@ -32,6 +32,7 @@
 
 #include "camera.h"
 #include "shadow_map.h"
+#include "ssao.h"
 
 #define ENABLE_DEARIMGUI
 
@@ -61,6 +62,9 @@ enum RENDER_LAYER : int {
     LAYER_DEBUG = 1,
     LAYER_SHADOW_OPAQUE = 2,
     LAYER_SKY = 3,
+    LAYER_DRAW_NORMALS,
+    LAYER_SSAO,
+    LAYER_SSAO_BLUR,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -107,6 +111,12 @@ enum SHADERS_CODE {
     SHADER_SHADOW_ALPHATESTED_PS = 6,
     SHADER_DEBUG_VS = 7,
     SHADER_DEBUG_PS = 8,
+    SHADER_DRAW_NORMALS_VS,
+    SHADER_DRAW_NORMALS_PS,
+    SHADER_SSAO_VS,
+    SHADER_SSAO_PS,
+    SHADER_SSAO_BLUR_VS,
+    SHADER_SSAO_BLUR_PS,
 
     _COUNT_SHADERS
 };
@@ -161,7 +171,6 @@ enum SAMPLER_INDEX {
     _COUNT_SAMPLER
 };
 struct SceneContext {
-
     // light (sun) settings
     float sun_theta;
     float sun_phi;
@@ -192,6 +201,7 @@ struct SceneContext {
 
 Camera * g_camera;
 ShadowMap * g_smap;
+SSAO * g_ssao;
 GameTimer g_timer;
 bool g_paused;
 bool g_resizing;
@@ -220,6 +230,7 @@ struct D3DRenderContext {
     IDXGISwapChain *                swapchain;
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
+    ID3D12RootSignature *           root_signature_ssao;
     ID3D12PipelineState *           psos[_COUNT_RENDERCOMPUTE_LAYER];
 
     // Command objects
@@ -238,8 +249,14 @@ struct D3DRenderContext {
     UINT                            sky_tex_heap_index;
     UINT                            shadow_map_heap_index;
 
+    UINT                            ssao_heap_index_start;
+    UINT                            ssao_ambient_map_index;
+
     UINT                            null_cube_srv_index;
-    UINT                            null_tex_srv_index;
+    UINT                            null_tex_srv_index1;
+    UINT                            null_tex_srv_index2;
+
+
     D3D12_GPU_DESCRIPTOR_HANDLE     null_srv;
 
     PassConstants                   main_pass_constants;
@@ -933,55 +950,16 @@ draw_render_items (
         }
     }
 }
-//
-// shadow map heap indices book-keeping
 static void
-shadow_map_bookkeeping (ShadowMap * smap, D3DRenderContext * render_ctx, int smap_heap_index_offset) {
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = 1;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-
-    render_ctx->shadow_map_heap_index = render_ctx->sky_tex_heap_index + smap_heap_index_offset;
-    render_ctx->null_cube_srv_index = render_ctx->shadow_map_heap_index + 1;
-    render_ctx->null_tex_srv_index = render_ctx->null_cube_srv_index + 1;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
-
-    D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
-
-    render_ctx->null_srv = null_srv_gpu;
-
-    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
-    null_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size;
-
-    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
-
-    D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
-
-    ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
-}
-static void
-create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
+create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO * ssao) {
     _ASSERT_EXPR(render_ctx->cbv_srv_uav_descriptor_size > 0, _T("invalid descriptor size value"));
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors =
         _COUNT_TEX
-        + 4 /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
+        + 3 /* one for ShadowMap srv, two other null srvs for shadow hlsl code (null cube and tex) */
+        + 5 /* SSAO srvs */
         + 1 /* DearImGui */;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -1072,7 +1050,7 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     //
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
-    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS;
+    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS + 1 /* SSAO normal map */ + 2 /* SSAO ambient maps */;
     rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
@@ -1088,8 +1066,67 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
 
     //
-    // shadow map heap indices book-keeping
-    shadow_map_bookkeeping(smap, render_ctx, 4);
+    // shadow map and ssao heap indices setup
+    //
+    render_ctx->shadow_map_heap_index = render_ctx->sky_tex_heap_index + 4 /* offset for 4 skybox textures */;
+
+    render_ctx->ssao_heap_index_start = render_ctx->shadow_map_heap_index + 1;
+    render_ctx->ssao_ambient_map_index = render_ctx->ssao_heap_index_start + 3;
+
+    render_ctx->null_cube_srv_index = render_ctx->ssao_heap_index_start + 5 /* 5 srvs for ssao */;
+    render_ctx->null_tex_srv_index1 = render_ctx->null_cube_srv_index + 1;
+    render_ctx->null_tex_srv_index2 = render_ctx->null_tex_srv_index1 + 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+
+    render_ctx->null_srv = null_srv_gpu;
+
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv_desc.Texture2D.MostDetailedMip = 0;
+    srv_desc.Texture2D.MipLevels = 0;
+    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+    null_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size;
+    render_ctx->device->CreateShaderResourceView(nullptr, &srv_desc, null_srv_cpu);
+
+    //
+    // shadow map descriptors book-keeping
+    //
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
+
+    ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
+
+    //
+    // SSAO descriptors book-keeping
+    //
+    D3D12_CPU_DESCRIPTOR_HANDLE ssao_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    ssao_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE ssao_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    ssao_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE ssao_rtv_cpu = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    ssao_rtv_cpu.ptr += render_ctx->rtv_descriptor_size * NUM_BACKBUFFERS;
+
+    SSAO_CreateDescriptors(
+        ssao,
+        render_ctx->depth_stencil_buffer,
+        ssao_srv_cpu, ssao_srv_gpu, ssao_rtv_cpu,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->rtv_descriptor_size
+    );
 }
 static void
 get_static_samplers (D3D12_STATIC_SAMPLER_DESC out_samplers []) {
@@ -1233,15 +1270,23 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     tex_table1.RegisterSpace = 0;       //space0
     tex_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // -- rest of textures
+    // -- ssao map (t2)
     D3D12_DESCRIPTOR_RANGE tex_table2 = {};
     tex_table2.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    tex_table2.NumDescriptors = _COUNT_TEX;
+    tex_table2.NumDescriptors = 1;
     tex_table2.BaseShaderRegister = 2;  //t2
     tex_table2.RegisterSpace = 0;       //space0
     tex_table2.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER slot_root_params[6] = {};
+    // -- rest of textures
+    D3D12_DESCRIPTOR_RANGE tex_table3 = {};
+    tex_table3.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table3.NumDescriptors = _COUNT_TEX;
+    tex_table3.BaseShaderRegister = 3;  //t3
+    tex_table3.RegisterSpace = 0;       //space0
+    tex_table3.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[7] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     // -- obj cbuffer
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -1267,17 +1312,23 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table0;
     slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // -- sky cubemap texture
+    // -- shadow map
     slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
     slot_root_params[4].DescriptorTable.pDescriptorRanges = &tex_table1;
     slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // -- textures
+    // -- ssao
     slot_root_params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[5].DescriptorTable.NumDescriptorRanges = 1;
     slot_root_params[5].DescriptorTable.pDescriptorRanges = &tex_table2;
     slot_root_params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // -- textures
+    slot_root_params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[6].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[6].DescriptorTable.pDescriptorRanges = &tex_table3;
+    slot_root_params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
     get_static_samplers(samplers);
@@ -1297,6 +1348,137 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     if (error_blob) {
         ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
     }
+
+    device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
+}
+static void
+create_root_signature_ssao (ID3D12Device * device, ID3D12RootSignature ** root_signature) {
+    // -- normal (t0) and depth (t1) maps
+    D3D12_DESCRIPTOR_RANGE tex_table0 = {};
+    tex_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table0.NumDescriptors = 2;
+    tex_table0.BaseShaderRegister = 0;  //t0 and t1 will be used
+    tex_table0.RegisterSpace = 0;       //space0
+    tex_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // -- random vector map (t2)
+    D3D12_DESCRIPTOR_RANGE tex_table1 = {};
+    tex_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    tex_table1.NumDescriptors = 1;
+    tex_table1.BaseShaderRegister = 2;  //t2 will be used
+    tex_table1.RegisterSpace = 0;       //space0
+    tex_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
+    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
+    // -- obj cbuffer
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    slot_root_params[0].Descriptor.ShaderRegister = 0;  //b0
+    slot_root_params[0].Descriptor.RegisterSpace = 0;
+    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // -- pass cbuffer
+    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    slot_root_params[1].Constants.ShaderRegister = 1;  //b1
+    slot_root_params[1].Constants.RegisterSpace = 0;
+    slot_root_params[1].Constants.Num32BitValues = 1;
+    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // -- material sbuffer
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    slot_root_params[2].Descriptor.ShaderRegister = 0;  //t0
+    slot_root_params[2].Descriptor.RegisterSpace = 1;   //space1
+    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // -- normal / depth maps
+    slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[3].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[3].DescriptorTable.pDescriptorRanges = &tex_table0;
+    slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // -- random vectors map
+    slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[4].DescriptorTable.pDescriptorRanges = &tex_table1;
+    slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+
+    D3D12_STATIC_SAMPLER_DESC samplers[4] = {};
+    // 0: PointClamp Sampler
+    samplers[0] = {};
+    samplers[0].ShaderRegister = 0;    //s0
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].MipLODBias = 0;
+    samplers[0].MaxAnisotropy = 16;
+    samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[0].MinLOD = 0.f;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    samplers[0].RegisterSpace = 0;
+    // 1: LinearClamp Sampler
+    samplers[1] = {};
+    samplers[1].ShaderRegister = 1;    //s1
+    samplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].MipLODBias = 0;
+    samplers[1].MaxAnisotropy = 16;
+    samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[1].MinLOD = 0.f;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    samplers[1].RegisterSpace = 0;
+    // 2: Depth Sampler
+    samplers[2] = {};
+    samplers[2].ShaderRegister = 2;    //s2
+    samplers[2].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[2].AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[2].AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[2].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[2].MipLODBias = 0;
+    samplers[2].MaxAnisotropy = 0;
+    samplers[2].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[2].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[2].MinLOD = 0.f;
+    samplers[2].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    samplers[2].RegisterSpace = 0;
+    // 3: Linear Sampler
+    samplers[3] = {};
+    samplers[3].ShaderRegister = 3;    //s3
+    samplers[3].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[3].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[3].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[3].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[3].MipLODBias = 0;
+    samplers[3].MaxAnisotropy = 16;
+    samplers[3].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[3].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[3].MinLOD = 0.f;
+    samplers[3].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    samplers[3].RegisterSpace = 0;
+
+    // A root signature is an array of root parameters.
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = _countof(slot_root_params);
+    root_sig_desc.pParameters = slot_root_params;
+    root_sig_desc.NumStaticSamplers = _countof(samplers);
+    root_sig_desc.pStaticSamplers = samplers;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ID3DBlob * serialized_root_sig = nullptr;
+    ID3DBlob * error_blob = nullptr;
+    HRESULT hr = D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
+
+    if (error_blob)
+        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
 
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
 }
@@ -1426,31 +1608,36 @@ create_pso (D3DRenderContext * render_ctx) {
     ds_desc.FrontFace = def_stencil_op;
     ds_desc.BackFace = def_stencil_op;
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
-    opaque_pso_desc.pRootSignature = render_ctx->root_signature;
-    opaque_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferPointer();
-    opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferSize();
-    opaque_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
-    opaque_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
-    opaque_pso_desc.BlendState = def_blend_desc;
-    opaque_pso_desc.SampleMask = UINT_MAX;
-    opaque_pso_desc.RasterizerState = def_rasterizer_desc;
-    opaque_pso_desc.DepthStencilState = ds_desc;
-    opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
-    opaque_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
-    opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
-    opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    opaque_pso_desc.NumRenderTargets = 1;
-    opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
-    opaque_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
-    opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC base_pso_desc = {};
+    base_pso_desc.pRootSignature = render_ctx->root_signature;
+    base_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferPointer();
+    base_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_STANDARD_VS]->GetBufferSize();
+    base_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
+    base_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
+    base_pso_desc.BlendState = def_blend_desc;
+    base_pso_desc.SampleMask = UINT_MAX;
+    base_pso_desc.RasterizerState = def_rasterizer_desc;
+    base_pso_desc.DepthStencilState = ds_desc;
+    base_pso_desc.DSVFormat = render_ctx->depthstencil_format;
+    base_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
+    base_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
+    base_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    base_pso_desc.NumRenderTargets = 1;
+    base_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
+    base_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    base_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
+    //
+    // -- PSO for opaque objects
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = base_pso_desc;
+    opaque_pso_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
+    opaque_pso_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
 
     //
     // -- PSO for shadow map pass
     //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC smap_pso_desc = opaque_pso_desc;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC smap_pso_desc = base_pso_desc;
     smap_pso_desc.RasterizerState.DepthBias = 100000;
     smap_pso_desc.RasterizerState.DepthBiasClamp = 0.0f;
     smap_pso_desc.RasterizerState.SlopeScaledDepthBias = 1.0f;
@@ -1466,7 +1653,7 @@ create_pso (D3DRenderContext * render_ctx) {
 
     //
     // -- PSO for debug layer
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc = opaque_pso_desc;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc = base_pso_desc;
     debug_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferPointer();
     debug_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferSize();
     debug_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_PS]->GetBufferPointer();
@@ -1476,7 +1663,7 @@ create_pso (D3DRenderContext * render_ctx) {
     //
     // -- PSO for sky
     //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC sky_pso = opaque_pso_desc;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC sky_pso = base_pso_desc;
 
     // -- camera is inside the sky sphere so just turn of culling
     sky_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -1492,33 +1679,46 @@ create_pso (D3DRenderContext * render_ctx) {
 
     render_ctx->device->CreateGraphicsPipelineState(&sky_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_SKY]));
 
-    /*
     //
-    // -- Create PSO for Highlight obj(s)
+    // PSO for draw normals
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC draw_normals_pso = base_pso_desc;
+    draw_normals_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_DRAW_NORMALS_VS]->GetBufferPointer();
+    draw_normals_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_DRAW_NORMALS_VS]->GetBufferSize();
+    draw_normals_pso.PS.pShaderBytecode = render_ctx->shaders[SHADER_DRAW_NORMALS_PS]->GetBufferPointer();
+    draw_normals_pso.PS.BytecodeLength = render_ctx->shaders[SHADER_DRAW_NORMALS_PS]->GetBufferSize();
+    draw_normals_pso.RTVFormats[0] = g_ssao->normal_map_format;
+    draw_normals_pso.SampleDesc.Count = 1;
+    draw_normals_pso.SampleDesc.Quality = 0;
+    draw_normals_pso.DSVFormat = render_ctx->depthstencil_format;
+    render_ctx->device->CreateGraphicsPipelineState(&draw_normals_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_DRAW_NORMALS]));
+
     //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC highlight_pso_desc = opaque_pso_desc;
+    // PSO for SSAO
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC ssao_pso_desc = base_pso_desc;
+    ssao_pso_desc.InputLayout = {nullptr, 0};
+    ssao_pso_desc.pRootSignature = render_ctx->root_signature_ssao;
+    ssao_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_SSAO_VS]->GetBufferPointer();
+    ssao_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_SSAO_VS]->GetBufferSize();
+    ssao_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_SSAO_PS]->GetBufferPointer();
+    ssao_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_SSAO_PS]->GetBufferSize();
+    // ssao pass does not need depth buffer
+    ssao_pso_desc.DepthStencilState.DepthEnable = false;
+    ssao_pso_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    ssao_pso_desc.RTVFormats[0] = g_ssao->ambient_map_format;
+    ssao_pso_desc.SampleDesc.Count = 1;
+    ssao_pso_desc.SampleDesc.Quality = 0;
+    ssao_pso_desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+    render_ctx->device->CreateGraphicsPipelineState(&ssao_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SSAO]));
 
-    // Change the depth test from < to <= so that if we draw the same triangle twice, it will
-    // still pass the depth test.  This is needed because we redraw the picked triangle with a
-    // different material to highlight it.  If we do not use <=, the triangle will fail the
-    // depth test the 2nd time we try and draw it.
-    highlight_pso_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    //
+    // PSO for SSAO blur
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC ssao_blur_pso_desc = ssao_pso_desc;
+    ssao_blur_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_SSAO_BLUR_VS]->GetBufferPointer();
+    ssao_blur_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_SSAO_BLUR_VS]->GetBufferSize();
+    ssao_blur_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_SSAO_BLUR_PS]->GetBufferPointer();
+    ssao_blur_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_SSAO_BLUR_PS]->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&ssao_blur_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SSAO_BLUR]));
 
-    D3D12_RENDER_TARGET_BLEND_DESC transparency_blend_desc = {};
-    transparency_blend_desc.BlendEnable = true;
-    transparency_blend_desc.LogicOpEnable = false;
-    transparency_blend_desc.SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    transparency_blend_desc.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-    transparency_blend_desc.BlendOp = D3D12_BLEND_OP_ADD;
-    transparency_blend_desc.SrcBlendAlpha = D3D12_BLEND_ONE;
-    transparency_blend_desc.DestBlendAlpha = D3D12_BLEND_ZERO;
-    transparency_blend_desc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    transparency_blend_desc.LogicOp = D3D12_LOGIC_OP_NOOP;
-    transparency_blend_desc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
-    highlight_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
-    render_ctx->device->CreateGraphicsPipelineState(&highlight_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_HIGHLIGHT]));
-    */
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1732,6 +1932,10 @@ update_shadow_pass_cb(ShadowMap * smap, D3DRenderContext * render_ctx, GameTimer
     memcpy(pass_ptr, &render_ctx->shadow_pass_constants, sizeof(PassConstants));
 }
 static void
+update_ssao_cb (SSAO * ssao, D3DRenderContext * render_ctx, GameTimer * timer) {
+    ...
+}
+static void
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * frame_index) {
 
     // Cycle through the circular frame resource array.
@@ -1823,6 +2027,10 @@ draw_scene_to_shadow_map (ShadowMap * smap, D3DRenderContext * render_ctx) {
         D3D12_RESOURCE_STATE_GENERIC_READ
     );
 }
+static void
+draw_normals_and_depth (SSAO * ssao, D3DRenderContext * render_ctx) {
+    ...
+}
 static HRESULT
 draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
     HRESULT ret = E_FAIL;
@@ -1846,6 +2054,9 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
 
     cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
 
+    //
+    // SHADOW MAP pass
+
     // Bind all materials. For structured buffers, we can bypass heap and set a root descriptor
     ID3D12Resource * mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
     cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
@@ -1863,8 +2074,19 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap) {
 
     draw_scene_to_shadow_map(smap, render_ctx);
 
+    //
+    // Normal / Depth pass (for SSAO)
+    draw_normals_and_depth(ssao, render_ctx);
+
+    //
+    // Compute SSAO
+    ...
+
+
+    // Main Rendering Pass
+
     // -- set viewport and scissor
-    cmdlist->RSSetViewports(1, &render_ctx->viewport);
+        cmdlist->RSSetViewports(1, &render_ctx->viewport);
     cmdlist->RSSetScissorRects(1, &render_ctx->scissor_rect);
 
     // -- indicate that the backbuffer will be used as the render target
@@ -2399,7 +2621,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ShadowMap_Init(g_smap, render_ctx->device, 2048, 2048, DXGI_FORMAT_R24G8_TYPELESS);
 
 
-
     //
     // Check 4X MSAA quality support for our back buffer format.
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS quality_levels;
@@ -2442,6 +2663,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->direct_cmd_list->Reset(render_ctx->direct_cmd_list_alloc, nullptr);
     }
 #pragma endregion
+
+
+    //
+    // SSAO setup
+    g_ssao = (SSAO *)malloc(sizeof(SSAO));
+    SSAO_Init(g_ssao, render_ctx->device, render_ctx->direct_cmd_list, g_scene_ctx.width, g_scene_ctx.height);
+
+
+
 
     DXGI_MODE_DESC backbuffer_desc = {};
     backbuffer_desc.Width = g_scene_ctx.width;
@@ -2559,7 +2789,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion
 
-    create_descriptor_heaps(render_ctx, g_smap);
+    create_descriptor_heaps(render_ctx, g_smap, g_ssao);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2639,6 +2869,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     UINT obj_cb_size = sizeof(ObjectConstants);
     UINT mat_data_size = sizeof(MaterialData);
     UINT pass_cb_size = sizeof(PassConstants);
+    UINT ssao_cb_size = sizeof(SSAOConstants);
     for (UINT i = 0; i < NUM_QUEUING_FRAMES; ++i) {
         // -- create a cmd-allocator for each frame
         res = render_ctx->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&render_ctx->frame_resources[i].cmd_list_alloc));
@@ -2648,12 +2879,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].material_ptr, &render_ctx->frame_resources[i].material_sbuffer);
 
         create_upload_buffer(render_ctx->device, pass_cb_size * 2, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
+
+        create_upload_buffer(render_ctx->device, ssao_cb_size * 1, &render_ctx->frame_resources[i].ssao_ptr, &render_ctx->frame_resources[i].ssao_cb);
     }
 #pragma endregion
 
     // ========================================================================================================
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
+
+    create_root_signature_ssao(render_ctx->device, &render_ctx->root_signature_ssao);
+
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
@@ -2663,6 +2899,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     TCHAR sky_shader_path [] = _T("./shaders/sky.hlsl");
     TCHAR shadow_shader_path [] = _T("./shaders/shadows.hlsl");
     TCHAR debug_shader_path [] = _T("./shaders/shadow_debug.hlsl");
+    TCHAR draw_normals_shader_path [] = _T("./shaders/draw_normals.hlsl");
+    TCHAR ssao_shader_path [] = _T("./shaders/ssao.hlsl");
+    TCHAR ssao_blur_shader_path [] = _T("./shaders/ssao_blur.hlsl");
 
     {   // standard shaders
         compile_shader(standard_shader_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_STANDARD_VS]);
@@ -2691,9 +2930,27 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         compile_shader(sky_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_PS]);
     }
+    {   // draw normals shaders
+        compile_shader(draw_normals_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DRAW_NORMALS_VS]);
+
+        compile_shader(draw_normals_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DRAW_NORMALS_PS]);
+    }
+    {   // ssao shaders
+        compile_shader(ssao_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SSAO_VS]);
+
+        compile_shader(ssao_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SSAO_PS]);
+    }
+    {   // ssao blur shaders
+        compile_shader(ssao_blur_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SSAO_BLUR_VS]);
+
+        compile_shader(ssao_blur_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SSAO_BLUR_PS]);
+    }
 #pragma endregion
 
+
     create_pso(render_ctx);
+    SSAO_SetPSOs(g_ssao, render_ctx->psos[LAYER_SSAO], render_ctx->psos[LAYER_SSAO_BLUR]);
+
 
     // NOTE(omid): Before closing/executing command list specify the depth-stencil-buffer transition from its initial state to be used as a depth buffer.
     resource_usage_transition(render_ctx->direct_cmd_list, render_ctx->depth_stencil_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -2840,6 +3097,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 update_shadow_transform(&g_timer);
                 update_shadow_pass_cb(g_smap, render_ctx, &g_timer);
+                update_ssao_cb(g_ssao, render_ctx, &g_timer);
 
                 update_object_cbuffer(render_ctx);
 
@@ -2910,6 +3168,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     ShadowMap_Deinit(g_smap);
     ::free(g_smap);
+
+    SSAO_Deinit(g_ssao);
+    ::free(g_ssao);
 
     //render_ctx->swapchain3->Release();
     render_ctx->swapchain->Release();

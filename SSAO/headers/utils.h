@@ -32,9 +32,9 @@ struct ObjectConstants {
     XMFLOAT4X4 tex_transform;
 
     UINT mat_index;
-    UINT instance_pad0;
-    UINT instance_pad1;
-    UINT instance_pad2;
+    UINT obj_pad0;
+    UINT obj_pad1;
+    UINT obj_pad2;
 
     float padding[28];
 };
@@ -48,6 +48,7 @@ struct PassConstants {
     XMFLOAT4X4 inv_proj;
     XMFLOAT4X4 view_proj;
     XMFLOAT4X4 inv_view_proj;
+    XMFLOAT4X4 view_proj_tex;
     XMFLOAT4X4 shadow_transform;
     XMFLOAT3 eye_posw;
     float cbuffer_per_obj_pad1;
@@ -70,9 +71,31 @@ struct PassConstants {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light lights[MAX_LIGHTS];
 
-    float padding[56];  // Padding so the constant buffer is 256-byte aligned
+    float padding[40];  // Padding so the constant buffer is 256-byte aligned
 };
 static_assert(1536 == sizeof(PassConstants), "Constant buffer size must be 256b aligned");
+
+// -- SSAO cbuffer data
+struct SSAOConstants {
+    XMFLOAT4X4 proj;
+    XMFLOAT4X4 inv_proj;
+    XMFLOAT4X4 proj_tex;
+    XMFLOAT4 offset_vectors [14];
+
+    // for ssao_blur.hlsl
+    XMFLOAT4 blur_weights[3];
+
+    XMFLOAT2 inv_render_target_size;
+
+    // coordinates given in view space
+    float occlusion_radius;
+    float occlusion_fade_start;
+    float occlusion_fade_end;
+    float surface_epsilon;
+
+    float padding[6];
+};
+static_assert(512 == sizeof(SSAOConstants), "Constant buffer size must be 256b aligned");
 
 struct MaterialData {
     XMFLOAT4    diffuse_albedo;
@@ -148,6 +171,9 @@ struct FrameResource {
     ID3D12Resource * obj_cb;
     uint8_t * obj_ptr;
 
+    ID3D12Resource * ssao_cb;
+    uint8_t * ssao_ptr;
+
     // Fence value to mark commands up to this fence point.  This lets us
     // check if these frame resources are still in use by the GPU.
     UINT64 fence;
@@ -187,7 +213,7 @@ struct RenderItem {
     MeshGeometry * geometry;
 };
 
-static XMFLOAT4X4
+inline XMFLOAT4X4
 Identity4x4() {
     static XMFLOAT4X4 I(
         1.0f, 0.0f, 0.0f, 0.0f,
@@ -198,17 +224,17 @@ Identity4x4() {
     return I;
 }
 
-static int
+inline int
 rand_int (int a, int b) {
     return a + rand() % ((b - a) + 1);
 }
 // Returns random float in [0, 1).
-static float
+inline float
 rand_float () {
     return (float)(rand()) / (float)RAND_MAX;
 }
 // Returns random float in [a, b).
-static float
+inline float
 rand_float (float a, float b) {
     return a + rand_float() * (b - a);
 }

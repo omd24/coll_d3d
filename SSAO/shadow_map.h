@@ -5,8 +5,8 @@
 struct ShadowMap {
     ID3D12Device * device;
 
-	D3D12_VIEWPORT viewport;
-	D3D12_RECT scissor_rect;
+    D3D12_VIEWPORT viewport;
+    D3D12_RECT scissor_rect;
 
     UINT width;
     UINT height;
@@ -37,7 +37,4 @@ ShadowMap_CreateDescriptors (
 
 void
 ShadowMap_Resize (ShadowMap * smap, UINT w, UINT h);
-
-
-
 

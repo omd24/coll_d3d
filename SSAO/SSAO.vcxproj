@@ -78,9 +78,11 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
+    <OutDir>./</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
+    <OutDir>./</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -163,7 +165,8 @@
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="camera.cpp" />
     <ClCompile Include="shadow_map.cpp" />
-    <ClCompile Include="_ssao.cpp" />
+    <ClCompile Include="ssao.cpp" />
+    <ClCompile Include="_main_ssao_demo.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="camera.h" />
@@ -173,6 +176,7 @@
     <ClInclude Include="headers\mesh_geometry.h" />
     <ClInclude Include="headers\utils.h" />
     <ClInclude Include="shadow_map.h" />
+    <ClInclude Include="ssao.h" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\common.hlsl">

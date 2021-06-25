@@ -56,7 +56,7 @@ create_resources_internal (ShadowMap * smap) {
 }
 void
 ShadowMap_Init (ShadowMap * smap, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format) {
-    _ASSERT_EXPR(smap, _T("Invalid Render target ptr"));
+    _ASSERT_EXPR(smap, _T("Invalid shadow map ptr"));
     UNREFERENCED_PARAMETER(format);
 
     smap->device = dev;
