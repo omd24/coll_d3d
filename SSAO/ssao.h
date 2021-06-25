@@ -96,6 +96,7 @@ SSAO_Resize (SSAO * ssao, UINT w, UINT h);
 ///</summary>
 void
 SSAO_ComputeSSAO (
+    SSAO * ssao,
     ID3D12GraphicsCommandList * cmdlist, 
     FrameResource * curr_frame, 
     int blur_count

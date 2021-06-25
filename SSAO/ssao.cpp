@@ -68,7 +68,8 @@ blur_ambient_map (SSAO * ssao, ID3D12GraphicsCommandList * cmdlist, FrameResourc
     }
 }
 
-static void create_random_vector_texture (SSAO * ssao, ID3D12GraphicsCommandList * cmdlist) {
+static void
+create_random_vector_texture (SSAO * ssao, ID3D12GraphicsCommandList * cmdlist) {
     D3D12_RESOURCE_DESC tex_desc = {};
     tex_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     tex_desc.Alignment = 0;
@@ -132,7 +133,7 @@ static void create_random_vector_texture (SSAO * ssao, ID3D12GraphicsCommandList
         IID_PPV_ARGS(&ssao->random_vector_map_uploader)
     );
 
-    DirectX::PackedVector::XMCOLOR init_data[256 * 256];
+    DirectX::PackedVector::XMCOLOR * init_data = (DirectX::PackedVector::XMCOLOR*)::calloc(256 * 256, sizeof(DirectX::PackedVector::XMCOLOR));
     for (int i = 0; i < 256; ++i) {
         for (int j = 0; j < 256; ++j) {
             // random vecs in [0,1].  We will uncompress them in shader code to [-1,1].
@@ -165,6 +166,8 @@ static void create_random_vector_texture (SSAO * ssao, ID3D12GraphicsCommandList
         D3D12_RESOURCE_STATE_COPY_DEST,
         D3D12_RESOURCE_STATE_GENERIC_READ
     );
+
+    ::free(init_data);
 }
 static void
 create_offset_vectors (SSAO * ssao) {

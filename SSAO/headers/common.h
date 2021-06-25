@@ -23,6 +23,10 @@
 #include <assert.h>
 #include <math.h>
 
+#pragma warning (disable: 28182)    // pointer can be NULL.
+#pragma warning (disable: 6011)     // dereferencing a potentially null pointer
+#pragma warning (disable: 26495)    // not initializing struct members
+
 // _ASSERT_EXPR macro
 #include <crtdbg.h>
 #ifdef _DEBUG

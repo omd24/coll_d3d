@@ -981,7 +981,8 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap) {
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors =
         _COUNT_TEX
-        + 4 /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
+        + 4 /* one for ShadowMap srv, two other null srvs for shadow hlsl code (null cube and tex) */
+            // TODO(omid): IMO 3 descriptors are enough. Not sure about the usage of the 4th one 
         + 1 /* DearImGui */;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -2741,13 +2742,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
         imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            4     /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
+            4     /* ShadowMap srv, and two other null srvs for shadow hlsl code (null cube and tex) */
             ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
         imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
             _COUNT_TEX +
-            4     /* ShadowMap cpu-gpu srvs, two other null srvs for shadow hlsl code (null cube and tex) */
+            4     /* ShadowMap srv, and two other null srvs for shadow hlsl code (null cube and tex) */
             ));
 
             // Setup Platform/Renderer backends
