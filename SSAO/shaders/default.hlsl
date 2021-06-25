@@ -20,7 +20,7 @@ struct VertOut {
     float4 pos_h : SV_Position;
     float4 shadow_pos_h : POSITION0;
     float4 ssao_pos_h : POSITION1;
-    float3 pos_world : Position1;
+    float3 pos_world : Position2;
     float3 normal_world : NORMAL;
     float3 tangent_world : TANGENT;
     float2 texc : TEXCOORD;

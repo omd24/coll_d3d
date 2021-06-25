@@ -1074,10 +1074,10 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO *
     render_ctx->null_tex_srv_index2 = render_ctx->null_tex_srv_index1 + 1;
 
     D3D12_CPU_DESCRIPTOR_HANDLE null_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    null_srv_cpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+    null_srv_cpu.ptr += ((SIZE_T)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
 
     D3D12_GPU_DESCRIPTOR_HANDLE null_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    null_srv_gpu.ptr += (render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
+    null_srv_gpu.ptr += ((UINT64)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->null_cube_srv_index);
 
     render_ctx->null_srv = null_srv_gpu;
 
@@ -1094,13 +1094,13 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO *
     // shadow map descriptors book-keeping
     //
     D3D12_CPU_DESCRIPTOR_HANDLE smap_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+    smap_srv_cpu.ptr += (SIZE_T)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
 
     D3D12_GPU_DESCRIPTOR_HANDLE smap_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    smap_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
+    smap_srv_gpu.ptr += (UINT64)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->shadow_map_heap_index;
 
     D3D12_CPU_DESCRIPTOR_HANDLE smap_dsv_cpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-    smap_dsv_cpu.ptr += render_ctx->dsv_descriptor_size;
+    smap_dsv_cpu.ptr += (SIZE_T)render_ctx->dsv_descriptor_size;
 
     ShadowMap_CreateDescriptors(smap, smap_srv_cpu, smap_srv_gpu, smap_dsv_cpu);
 
@@ -1108,13 +1108,13 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO *
     // SSAO descriptors book-keeping
     //
     D3D12_CPU_DESCRIPTOR_HANDLE ssao_srv_cpu = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    ssao_srv_cpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
+    ssao_srv_cpu.ptr += (SIZE_T)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
 
     D3D12_GPU_DESCRIPTOR_HANDLE ssao_srv_gpu = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    ssao_srv_gpu.ptr += render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
+    ssao_srv_gpu.ptr += (UINT64)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->ssao_heap_index_start;
 
     D3D12_CPU_DESCRIPTOR_HANDLE ssao_rtv_cpu = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
-    ssao_rtv_cpu.ptr += render_ctx->rtv_descriptor_size * NUM_BACKBUFFERS;
+    ssao_rtv_cpu.ptr += (SIZE_T)render_ctx->rtv_descriptor_size * NUM_BACKBUFFERS;
 
     SSAO_CreateDescriptors(
         ssao,
@@ -2165,7 +2165,8 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO * ssao) {
     // change back to main root sig
     cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
 
-    // NOTE(omid): Rebind state whenever graphics root signature changes. 
+    // NOTE(omid): REBIND RESOURCES WHENEVER GRAPHICS ROOT SIG CHANGES
+    // Rebind state whenever graphics root signature changes...
     mat_buf = render_ctx->frame_resources[frame_index].material_sbuffer;
     cmdlist->SetGraphicsRootShaderResourceView(2, mat_buf->GetGPUVirtualAddress());
 
@@ -2207,8 +2208,17 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO * ssao) {
     sky_tex_descriptor.ptr += (UINT64)render_ctx->cbv_srv_uav_descriptor_size * render_ctx->sky_tex_heap_index;
     cmdlist->SetGraphicsRootDescriptorTable(3, sky_tex_descriptor);
 
-    // bind all [ordinary] textures.
-    // (only specify the first descriptor in the table, root sig knows how many descriptors we have in the table)
+    // rebind smap srv
+    smap_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    smap_descriptor.ptr += static_cast<UINT64>(render_ctx->cbv_srv_uav_descriptor_size) * render_ctx->shadow_map_heap_index;
+    cmdlist->SetGraphicsRootDescriptorTable(4, smap_descriptor);
+
+    // rebind ssao srv
+    ssao_descriptor = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    ssao_descriptor.ptr += static_cast<UINT64>(render_ctx->cbv_srv_uav_descriptor_size) * render_ctx->ssao_heap_index_start;
+    cmdlist->SetGraphicsRootDescriptorTable(5, ssao_descriptor);
+
+    // rebind [ordinary] textures
     cmdlist->SetGraphicsRootDescriptorTable(6, render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart());
 
     // 1. draw opaque objs
@@ -2973,9 +2983,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         create_upload_buffer(render_ctx->device, (UINT64)mat_data_size * _COUNT_MATERIAL, &render_ctx->frame_resources[i].material_ptr, &render_ctx->frame_resources[i].material_sbuffer);
 
-        create_upload_buffer(render_ctx->device, pass_cb_size * 2, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
+        create_upload_buffer(render_ctx->device, (UINT64)pass_cb_size * 2, &render_ctx->frame_resources[i].pass_cb_ptr, &render_ctx->frame_resources[i].pass_cb);
 
-        create_upload_buffer(render_ctx->device, ssao_cb_size * 1, &render_ctx->frame_resources[i].ssao_ptr, &render_ctx->frame_resources[i].ssao_cb);
+        create_upload_buffer(render_ctx->device, (UINT64)ssao_cb_size * 1, &render_ctx->frame_resources[i].ssao_ptr, &render_ctx->frame_resources[i].ssao_cb);
     }
 #pragma endregion
 
@@ -3224,9 +3234,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->frame_resources[i].obj_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].material_sbuffer->Unmap(0, nullptr);
         render_ctx->frame_resources[i].pass_cb->Unmap(0, nullptr);
+        render_ctx->frame_resources[i].ssao_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].obj_cb->Release();
         render_ctx->frame_resources[i].material_sbuffer->Release();
         render_ctx->frame_resources[i].pass_cb->Release();
+        render_ctx->frame_resources[i].ssao_cb->Release();
 
         render_ctx->frame_resources[i].cmd_list_alloc->Release();
     }
@@ -3247,6 +3259,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->shaders[i]->Release();
 
     render_ctx->root_signature->Release();
+    render_ctx->root_signature_ssao->Release();
 
     // release swapchain backbuffers resources
     for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i)

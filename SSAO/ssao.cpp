@@ -134,11 +134,13 @@ create_random_vector_texture (SSAO * ssao, ID3D12GraphicsCommandList * cmdlist) 
     );
 
     DirectX::PackedVector::XMCOLOR * init_data = (DirectX::PackedVector::XMCOLOR*)::calloc(256 * 256, sizeof(DirectX::PackedVector::XMCOLOR));
-    for (int i = 0; i < 256; ++i) {
-        for (int j = 0; j < 256; ++j) {
-            // random vecs in [0,1].  We will uncompress them in shader code to [-1,1].
-            XMFLOAT3 v(rand_float(), rand_float(), rand_float());
-            init_data[i * 256 + j] = DirectX::PackedVector::XMCOLOR(v.x, v.y, v.z, 0.0f);
+    if (init_data) {
+        for (int i = 0; i < 256; ++i) {
+            for (int j = 0; j < 256; ++j) {
+                // random vecs in [0,1].  We will uncompress them in shader code to [-1,1].
+                XMFLOAT3 v(rand_float(), rand_float(), rand_float());
+                init_data[i * 256 + j] = DirectX::PackedVector::XMCOLOR(v.x, v.y, v.z, 0.0f);
+            }
         }
     }
 
@@ -283,6 +285,8 @@ SSAO_Deinit (SSAO * ssao) {
     ssao->ambient_map0->Release();
     ssao->ambient_map1->Release();
     ssao->normal_map->Release();
+    ssao->random_vector_map_uploader->Release();
+    ssao->random_vector_map->Release();
 }
 
 int
@@ -449,7 +453,7 @@ SSAO_ComputeSSAO (
         D3D12_RESOURCE_STATE_RENDER_TARGET
     );
 
-    float clear_vals[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float clear_vals [] = {1.0f, 1.0f, 1.0f, 1.0f};
     cmdlist->ClearRenderTargetView(ssao->ambient_map0_cpu_rtv, clear_vals, 0, nullptr);
 
     cmdlist->OMSetRenderTargets(1, &ssao->ambient_map0_cpu_rtv, true, nullptr);
