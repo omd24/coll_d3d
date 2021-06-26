@@ -1043,6 +1043,7 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO *
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;
     render_ctx->device->CreateShaderResourceView(sky_tex4, &srv_desc, descriptor_cpu_handle);
 
+#if 0   // For SSAO, dsv and depth buffer should be created before SSAO descriptors setup
     //
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
@@ -1060,6 +1061,8 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO *
     dsv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     dsv_heap_desc.NodeMask = 0;
     render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
+
+#endif // 0
 
     //
     // shadow map and ssao heap indices setup
@@ -1376,8 +1379,8 @@ create_root_signature_ssao (ID3D12Device * device, ID3D12RootSignature ** root_s
     // -- cb root constant (horz_blur)
     slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     slot_root_params[1].Constants.ShaderRegister = 1;  //b1
-    slot_root_params[1].Constants.RegisterSpace = 0;
     slot_root_params[1].Constants.Num32BitValues = 1;
+    slot_root_params[1].Constants.RegisterSpace = 0;
     slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // -- normal / depth maps
@@ -1821,6 +1824,15 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMVECTOR det_view_proj = XMMatrixDeterminant(view_proj);
     XMMATRIX inv_view_proj = XMMatrixInverse(&det_view_proj, view_proj);
 
+    // transform NDC space to texture space
+    // [-1,+1]^2   -->   [0,1]^2
+    XMMATRIX T(
+        0.5f, 0.0f, 0.0f, 0.0f,
+        0.0f, -0.5f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.5f, 0.5f, 0.0f, 1.0f
+    );
+    XMMATRIX view_proj_tex = XMMatrixMultiply(view_proj, T);
     XMMATRIX shadow_transform = XMLoadFloat4x4(&g_scene_ctx.shadow_transform);
 
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view, XMMatrixTranspose(view));
@@ -1829,16 +1841,16 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_proj, XMMatrixTranspose(inv_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.inv_view_proj, XMMatrixTranspose(inv_view_proj));
+    XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj_tex, XMMatrixTranspose(view_proj_tex));
     XMStoreFloat4x4(&render_ctx->main_pass_constants.shadow_transform, XMMatrixTranspose(shadow_transform));
     render_ctx->main_pass_constants.eye_posw = Camera_GetPosition3f(g_camera);
-
     render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)g_scene_ctx.width, (float)g_scene_ctx.height);
     render_ctx->main_pass_constants.inv_render_target_size = XMFLOAT2(1.0f / g_scene_ctx.width, 1.0f / g_scene_ctx.height);
     render_ctx->main_pass_constants.nearz = 1.0f;
     render_ctx->main_pass_constants.farz = 1000.0f;
     render_ctx->main_pass_constants.delta_time = timer->delta_time;
     render_ctx->main_pass_constants.total_time = Timer_GetTotalTime(timer);
-    render_ctx->main_pass_constants.ambient_light = {.25f, .25f, .35f, 1.0f};
+    render_ctx->main_pass_constants.ambient_light = {.4f, .4f, .6f, 1.0f};
 
     render_ctx->main_pass_constants.lights[0].direction = g_scene_ctx.rotated_light_dirs[0];
     render_ctx->main_pass_constants.lights[0].strength = {0.9f, 0.8f, 0.7f};
@@ -1943,9 +1955,12 @@ update_ssao_cb (SSAO * ssao, D3DRenderContext * render_ctx, GameTimer * timer) {
 
     int wts_cnt = SSAO_CalculateWeightsCount(ssao, 2.5f);
     float * blur_wts = reinterpret_cast<float *>(calloc(wts_cnt, sizeof(float)));
-    ssao_cb.blur_weights[0] = XMFLOAT4(&blur_wts[0]);
-    ssao_cb.blur_weights[1] = XMFLOAT4(&blur_wts[4]);
-    ssao_cb.blur_weights[2] = XMFLOAT4(&blur_wts[8]);
+    SSAO_CalculateGaussWeights(ssao, 2.5f, blur_wts);
+    if (blur_wts) {
+        ssao_cb.blur_weights[0] = XMFLOAT4(&blur_wts[0]);
+        ssao_cb.blur_weights[1] = XMFLOAT4(&blur_wts[4]);
+        ssao_cb.blur_weights[2] = XMFLOAT4(&blur_wts[8]);
+    }
 
     UINT w = ssao->render_target_width / 2;
     UINT h = ssao->render_target_height / 2;
@@ -2073,7 +2088,7 @@ draw_normals_and_depth (SSAO * ssao, D3DRenderContext * render_ctx) {
     );
 
     D3D12_CPU_DESCRIPTOR_HANDLE depth_hcpu = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-    float clear_vals[] = {0.0f, 0.0f, 1.0f, 0.0f};
+    float clear_vals [] = {0.0f, 0.0f, 1.0f, 0.0f};
     cmdlist->ClearRenderTargetView(normal_map_rtv, clear_vals, 0, nullptr);
     cmdlist->ClearDepthStencilView(
         depth_hcpu,
@@ -2894,7 +2909,25 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion
 
-    create_descriptor_heaps(render_ctx, g_smap, g_ssao);
+#if 1   // For SSAO, dsv and depth buffer should be created before SSAO descriptors setup
+    //
+    // Create Render Target View Descriptor Heap
+    D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
+    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS + 1 /* SSAO normal map */ + 2 /* SSAO ambient maps */;
+    rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
+
+    //
+    // Create Depth Stencil View Descriptor Heap
+    // +1 DSV for shadow map
+    D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc;
+    dsv_heap_desc.NumDescriptors = 2;
+    dsv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    dsv_heap_desc.NodeMask = 0;
+    render_ctx->device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&render_ctx->dsv_heap));
+#endif // 1
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2949,6 +2982,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart()
     );
 #pragma endregion Dsv_Creation
+
+    // depth buffer should be created before SSAO descriptors setup
+    create_descriptor_heaps(render_ctx, g_smap, g_ssao);
 
 #pragma region Create RTV
     // -- create frame resources: rtv for each frame

@@ -16,7 +16,7 @@ cbuffer CbSsao : register(b0){
     float g_surface_epsilon;
 };
 
-cbuffer CbRootConstants : register(b1) {
+cbuffer CbRootConstants : register(b1){
     bool g_horizontal_blur;
 };
 
@@ -32,7 +32,7 @@ SamplerState g_sam_linear_wrap : register(s3);
 
 static const int g_sample_count = 14;
 
-static const float2 g_tex_coords [6] = {
+static const float2 g_tex_coords[6] = {
     float2(0.0f, 1.0f),
     float2(0.0f, 0.0f),
     float2(1.0f, 0.0f),
@@ -101,7 +101,7 @@ ndc_depth_to_view_depth (float z_ndc) {
 }
 
 float4
-PS (VertexOut pin) : SV_Target {
+PS (VertexOut pin) : SV_Target{
     // p -- the point we are processing (calculating occlusion for)
     // r -- potential occluder obtatined from random point q
     // q -- random point from p (obtained with a random offset)
@@ -157,7 +157,7 @@ PS (VertexOut pin) : SV_Target {
         //      * the weight of the occlusion is scaled based on how far the occluder
         //        is from p. If r is far from p then it does not occlude
         float dist_z = p.z - r.z;
-        float dp = max(dot(n, normalize(r-p)), 0.0f);
+        float dp = max(dot(n, normalize(r - p)), 0.0f);
 
         float occlusion = dp * occlusion_func(dist_z);
         occlusion_sum += occlusion;

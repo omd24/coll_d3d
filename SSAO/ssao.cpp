@@ -330,6 +330,7 @@ SSAO_CreateDescriptors (
     UINT cbv_srv_uav_descriptor_size,
     UINT rtv_descriptor_size
 ) {
+    _ASSERT_EXPR(depth_stencil_buffer, _T("Invalid depth buffer"));
     if (ssao->initialized) {
         // srvs cpu handles
         ssao->ambient_map0_cpu_srv = hcpu_srv;

@@ -10,7 +10,6 @@ struct SSAO {
     DXGI_FORMAT normal_map_format;
 
     int max_blur_radius;
-    size_t  weight_count;
 
     UINT render_target_width;
     UINT render_target_height;
@@ -47,8 +46,6 @@ struct SSAO {
 
     ID3D12PipelineState * ssao_pso;
     ID3D12PipelineState * blur_pso;
-
-    ID3D12RootSignature * ssao_root_sig;
 
     bool initialized;
 };
