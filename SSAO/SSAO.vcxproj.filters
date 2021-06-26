@@ -103,5 +103,8 @@
     <FxCompile Include="shaders\ssao_blur.hlsl">
       <Filter>Resource Files</Filter>
     </FxCompile>
+    <FxCompile Include="shaders\ssao_debug.hlsl">
+      <Filter>Resource Files</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

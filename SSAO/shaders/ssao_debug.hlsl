@@ -20,12 +20,12 @@ VS (VertexIn vin) {
 
     // but let's apply world transform to reposition debug quad
     ret.pos_h = mul(float4(vin.pos_l, 1.0f), g_world);
-    
+
     ret.texc = vin.texc;
 
     return ret;
 }
 float4
 PS (VertexOut pin) : SV_Target {
-    return float4(g_smap.Sample(g_sam_linear_wrap, pin.texc).rrr, 1.0f);
+    return float4(g_ssao_map.Sample(g_sam_linear_wrap, pin.texc).rrr, 1.0f);
 }

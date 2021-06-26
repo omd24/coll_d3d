@@ -14,6 +14,9 @@ cbuffer CbSsao : register(b0){
     float g_occlusion_fade_start;
     float g_occlusion_fade_end;
     float g_surface_epsilon;
+
+    float g_ambient_power;
+    float g_occlusion_addend;
 };
 
 cbuffer CbRootConstants : register(b1){
@@ -164,8 +167,11 @@ PS (VertexOut pin) : SV_Target{
     }
     occlusion_sum /= g_sample_count;
 
+    // adding a float value to intensify occlusion effect
+    //occlusion_sum = saturate(occlusion_sum + g_occlusion_addend);
+    
     float access = 1.0f - occlusion_sum;
 
     // sharpen the contrast of the SSAO map to make the SSAO effect more dramatic
-    return saturate(pow(access, 6.0f));
+    return saturate(pow(access, g_ambient_power) - g_occlusion_addend);
 }

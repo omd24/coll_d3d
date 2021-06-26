@@ -55,9 +55,10 @@ bool g_imgui_enabled = false;
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
-    LAYER_DEBUG = 1,
-    LAYER_SHADOW_OPAQUE = 2,
-    LAYER_SKY = 3,
+    LAYER_DEBUG_SMAP = 1,
+    LAYER_DEBUG_SSAO = 2,
+    LAYER_SHADOW_OPAQUE,
+    LAYER_SKY,
     LAYER_DRAW_NORMALS,
     LAYER_SSAO,
     LAYER_SSAO_BLUR,
@@ -70,10 +71,11 @@ enum ALL_RENDERITEMS {
     RITEM_BOX = 2,
     RITEM_GRID = 3,
     RITEM_SKULL = 4,
-    RITEM_QUAD = 5,
+    RITEM_QUAD_SMAP = 5,
+    RITEM_QUAD_SSAO = 6,
 
     // NOTE(omid): following indices are meaningless. DON'T use them! 
-    RITEM_CYLENDER0 = 6,
+    RITEM_CYLENDER0 = 7,
     RITEM_CYLENDER1,
     RITEM_CYLENDER2,
     RITEM_CYLENDER3,
@@ -83,7 +85,7 @@ enum ALL_RENDERITEMS {
     RITEM_CYLENDER7,
     RITEM_CYLENDER8,
     RITEM_CYLENDER9,
-    RITEM_SPHERE0 = 16,
+    RITEM_SPHERE0 = 17,
     RITEM_SPHERE1,
     RITEM_SPHERE2,
     RITEM_SPHERE3,
@@ -96,7 +98,7 @@ enum ALL_RENDERITEMS {
 
     _COUNT_RENDERITEM
 };
-static_assert(26 == _COUNT_RENDERITEM, _T("invalid render items count"));
+static_assert(27 == _COUNT_RENDERITEM, _T("invalid render items count"));
 enum SHADERS_CODE {
     SHADER_STANDARD_VS = 0,
     SHADER_OPAQUE_PS = 1,
@@ -105,8 +107,10 @@ enum SHADERS_CODE {
     SHADER_SHADOW_VS = 4,
     SHADER_SHADOW_OPAQUE_PS = 5,
     SHADER_SHADOW_ALPHATESTED_PS = 6,
-    SHADER_DEBUG_VS = 7,
-    SHADER_DEBUG_PS = 8,
+    SHADER_DEBUG_SMAP_VS,
+    SHADER_DEBUG_SMAP_PS,
+    SHADER_DEBUG_SSAO_VS,
+    SHADER_DEBUG_SSAO_PS,
     SHADER_DRAW_NORMALS_VS,
     SHADER_DRAW_NORMALS_PS,
     SHADER_SSAO_VS,
@@ -204,6 +208,15 @@ bool g_resizing;
 bool g_mouse_active;
 SceneContext g_scene_ctx;
 
+//
+// global ui params
+bool g_ssao_enabled = true;
+bool g_dir_light_enabled = true;
+float g_accessiblity_power = 4.0f;
+float g_occlusion_addend = 0.1f;
+bool g_show_smap_debug = false;
+bool g_show_ssao_debug = false;
+
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
     uint32_t    size;
@@ -265,7 +278,8 @@ struct D3DRenderContext {
     // Render items divided by PSO.
     RenderItemArray                 opaque_ritems;
     RenderItemArray                 environment_ritems;
-    RenderItemArray                 debug_ritems;
+    RenderItemArray                 debug_ritems_smap;
+    RenderItemArray                 debug_ritems_ssao;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -762,26 +776,42 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->environment_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_SKY];
     render_ctx->environment_ritems.size++;
 
-    // quad
-    render_ctx->all_ritems.ritems[RITEM_QUAD].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_QUAD].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_QUAD].obj_cbuffer_index = 1;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].geometry = &render_ctx->geom[GEOM_SHAPES];
-    render_ctx->all_ritems.ritems[RITEM_QUAD].mat = &render_ctx->materials[MAT_BRICK];
-    render_ctx->all_ritems.ritems[RITEM_QUAD].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].index_count;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_QUAD].initialized = true;
+    // quad ssao
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].mat = &render_ctx->materials[MAT_BRICK];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO].initialized = true;
     render_ctx->all_ritems.size++;
-    render_ctx->debug_ritems.ritems[render_ctx->debug_ritems.size++] = render_ctx->all_ritems.ritems[RITEM_QUAD];
+    render_ctx->debug_ritems_ssao.ritems[render_ctx->debug_ritems_ssao.size++] = render_ctx->all_ritems.ritems[RITEM_QUAD_SSAO];
+
+    // quad smap
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].world, XMMatrixTranslation(0.0f, 0.75f, 0.0f));
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].geometry = &render_ctx->geom[GEOM_SHAPES];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].mat = &render_ctx->materials[MAT_BRICK];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].index_count = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].start_index_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].base_vertex_loc = render_ctx->geom[GEOM_SHAPES].submesh_geoms[_QUAD_ID].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->debug_ritems_smap.ritems[render_ctx->debug_ritems_smap.size++] = render_ctx->all_ritems.ritems[RITEM_QUAD_SMAP];
 
     // box
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 3;
     render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_BRICK];
     render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -797,7 +827,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     // globe
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].world, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 2.0f, 0.0f));
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GLOBE].tex_transform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 3;
+    render_ctx->all_ritems.ritems[RITEM_GLOBE].obj_cbuffer_index = 4;
     render_ctx->all_ritems.ritems[RITEM_GLOBE].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_GLOBE].mat = &render_ctx->materials[MAT_MIRROR];
     render_ctx->all_ritems.ritems[RITEM_GLOBE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -813,7 +843,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     // skull
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_SKULL].world, XMMatrixScaling(0.4f, 0.4f, 0.4f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
     render_ctx->all_ritems.ritems[RITEM_SKULL].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 4;
+    render_ctx->all_ritems.ritems[RITEM_SKULL].obj_cbuffer_index = 5;
     render_ctx->all_ritems.ritems[RITEM_SKULL].geometry = &render_ctx->geom[GEOM_SKULL];
     render_ctx->all_ritems.ritems[RITEM_SKULL].mat = &render_ctx->materials[MAT_SKULL];
     render_ctx->all_ritems.ritems[RITEM_SKULL].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -829,7 +859,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     // grid
     render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
     XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform, XMMatrixScaling(8.0f, 8.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 5;
+    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 6;
     render_ctx->all_ritems.ritems[RITEM_GRID].geometry = &render_ctx->geom[GEOM_SHAPES];
     render_ctx->all_ritems.ritems[RITEM_GRID].mat = &render_ctx->materials[MAT_TILE];
     render_ctx->all_ritems.ritems[RITEM_GRID].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -844,8 +874,8 @@ create_render_items (D3DRenderContext * render_ctx) {
 
     // cylinders and spheres
     XMMATRIX brick_tex_transform = XMMatrixScaling(1.5f, 2.0f, 1.0f);
-    UINT obj_cb_index = 6;
-    int _curr = 6;
+    UINT obj_cb_index = 7;
+    int _curr = 7;
     for (int i = 0; i < 5; ++i) {
         XMMATRIX left_cylinder_world = XMMatrixTranslation(-5.0f, 1.5f, -10.0f + i * 5.0f);
         XMMATRIX right_cylinder_world = XMMatrixTranslation(+5.0f, 1.5f, -10.0f + i * 5.0f);
@@ -1644,14 +1674,24 @@ create_pso (D3DRenderContext * render_ctx) {
     smap_pso_desc.NumRenderTargets = 0;
     render_ctx->device->CreateGraphicsPipelineState(&smap_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW_OPAQUE]));
 
+    // TODO(omid): Debug layers use the same VS, only changing PS is enough 
     //
-    // -- PSO for debug layer
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc = base_pso_desc;
-    debug_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferPointer();
-    debug_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_VS]->GetBufferSize();
-    debug_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_PS]->GetBufferPointer();
-    debug_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_PS]->GetBufferSize();
-    render_ctx->device->CreateGraphicsPipelineState(&debug_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_DEBUG]));
+    // -- PSO for shadow mapping debug layer
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc_samp = base_pso_desc;
+    debug_pso_desc_samp.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_SMAP_VS]->GetBufferPointer();
+    debug_pso_desc_samp.VS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_SMAP_VS]->GetBufferSize();
+    debug_pso_desc_samp.PS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_SMAP_PS]->GetBufferPointer();
+    debug_pso_desc_samp.PS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_SMAP_PS]->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&debug_pso_desc_samp, IID_PPV_ARGS(&render_ctx->psos[LAYER_DEBUG_SMAP]));
+
+    //
+    // -- PSO for SSAO debug layer
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC debug_pso_desc_ssao = base_pso_desc;
+    debug_pso_desc_ssao.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_SSAO_VS]->GetBufferPointer();
+    debug_pso_desc_ssao.VS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_SSAO_VS]->GetBufferSize();
+    debug_pso_desc_ssao.PS.pShaderBytecode = render_ctx->shaders[SHADER_DEBUG_SSAO_PS]->GetBufferPointer();
+    debug_pso_desc_ssao.PS.BytecodeLength = render_ctx->shaders[SHADER_DEBUG_SSAO_PS]->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&debug_pso_desc_ssao, IID_PPV_ARGS(&render_ctx->psos[LAYER_DEBUG_SSAO]));
 
     //
     // -- PSO for sky
@@ -1859,6 +1899,13 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     render_ctx->main_pass_constants.lights[2].direction = g_scene_ctx.rotated_light_dirs[2];
     render_ctx->main_pass_constants.lights[2].strength = {0.2f, 0.2f, 0.2f};
 
+    //
+    // ui params
+    if (g_dir_light_enabled)
+        render_ctx->main_pass_constants.dir_light_flag = 1;
+    else
+        render_ctx->main_pass_constants.dir_light_flag = 0;
+
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr;
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
 }
@@ -1924,6 +1971,7 @@ update_shadow_pass_cb(ShadowMap * smap, D3DRenderContext * render_ctx, GameTimer
     XMStoreFloat4x4(&render_ctx->shadow_pass_constants.inv_proj, XMMatrixTranspose(inv_proj));
     XMStoreFloat4x4(&render_ctx->shadow_pass_constants.view_proj, XMMatrixTranspose(view_proj));
     XMStoreFloat4x4(&render_ctx->shadow_pass_constants.inv_view_proj, XMMatrixTranspose(inv_view_proj));
+
     render_ctx->shadow_pass_constants.eye_posw = g_scene_ctx.light_pos_w;
     render_ctx->shadow_pass_constants.render_target_size= XMFLOAT2((float)w, (float)h);
     render_ctx->shadow_pass_constants.inv_render_target_size= XMFLOAT2(1.0f / w, 1.0f / h);
@@ -1932,6 +1980,11 @@ update_shadow_pass_cb(ShadowMap * smap, D3DRenderContext * render_ctx, GameTimer
 
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_ptr + sizeof(PassConstants);
     memcpy(pass_ptr, &render_ctx->shadow_pass_constants, sizeof(PassConstants));
+
+    //
+    // messy way of handling ui param
+    if (!g_dir_light_enabled)
+        memset(pass_ptr, 0, sizeof(PassConstants));
 }
 static void
 update_ssao_cb (SSAO * ssao, D3DRenderContext * render_ctx, GameTimer * timer) {
@@ -1971,6 +2024,17 @@ update_ssao_cb (SSAO * ssao, D3DRenderContext * render_ctx, GameTimer * timer) {
     ssao_cb.occlusion_fade_start = 0.2f;
     ssao_cb.occlusion_fade_end = 1.0f;
     ssao_cb.surface_epsilon = 0.05f;
+
+    //
+    // ui params
+    if (g_ssao_enabled) {
+        ssao_cb.accessiblity_power = g_accessiblity_power;
+        ssao_cb.occlusion_addend = g_occlusion_addend;
+    } else {
+        ssao_cb.accessiblity_power = 0.0f;
+        ssao_cb.occlusion_addend = 0.0f;
+    }
+
 
     uint8_t * ssao_ptr = render_ctx->frame_resources[render_ctx->frame_index].ssao_ptr;
     memcpy(ssao_ptr, &ssao_cb, sizeof(SSAOConstants));
@@ -2244,15 +2308,27 @@ draw_main (D3DRenderContext * render_ctx, ShadowMap * smap, SSAO * ssao) {
         &render_ctx->opaque_ritems
     );
 
-    // 2. draw debug quad
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_DEBUG]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        &render_ctx->debug_ritems
-    );
+    // 2. draw debug quad for smap
+    if (g_show_smap_debug) {
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_DEBUG_SMAP]);
+        draw_render_items(
+            cmdlist,
+            render_ctx->frame_resources[frame_index].obj_cb,
+            &render_ctx->debug_ritems_smap
+        );
+    }
 
-    // 3. draw sky
+    // 3. draw debug quad for ssao
+    if (g_show_ssao_debug) {
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_DEBUG_SSAO]);
+        draw_render_items(
+            cmdlist,
+            render_ctx->frame_resources[frame_index].obj_cb,
+            &render_ctx->debug_ritems_ssao
+        );
+    }
+
+    // 4. draw sky
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_SKY]);
     draw_render_items(
         cmdlist,
@@ -3039,7 +3115,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     TCHAR standard_shader_path [] = _T("./shaders/default.hlsl");
     TCHAR sky_shader_path [] = _T("./shaders/sky.hlsl");
     TCHAR shadow_shader_path [] = _T("./shaders/shadows.hlsl");
-    TCHAR debug_shader_path [] = _T("./shaders/shadow_debug.hlsl");
+    TCHAR debug_smap_shader_path [] = _T("./shaders/shadow_debug.hlsl");
+    TCHAR debug_ssao_shader_path [] = _T("./shaders/ssao_debug.hlsl");
     TCHAR draw_normals_shader_path [] = _T("./shaders/draw_normals.hlsl");
     TCHAR ssao_shader_path [] = _T("./shaders/ssao.hlsl");
     TCHAR ssao_blur_shader_path [] = _T("./shaders/ssao_blur.hlsl");
@@ -3061,10 +3138,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         defines_alphatest[0] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
         compile_shader(shadow_shader_path, _T("PS"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_SHADOW_ALPHATESTED_PS]);
     }
-    {   // debug shaders
-        compile_shader(debug_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_VS]);
-
-        compile_shader(debug_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_PS]);
+    {   // shadow debug shaders
+        compile_shader(debug_smap_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_SMAP_VS]);
+        compile_shader(debug_smap_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_SMAP_PS]);
+    }
+    {   // ssao debug shaders
+        compile_shader(debug_ssao_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_SSAO_VS]);
+        compile_shader(debug_ssao_shader_path, _T("PS"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEBUG_SSAO_PS]);
     }
     {   // sky shaders
         compile_shader(sky_shader_path, _T("VS"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SKY_VS]);
@@ -3126,7 +3206,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Imgui Setup
     bool * ptr_open = nullptr;
     ImGuiWindowFlags window_flags = 0;
-    bool beginwnd;
+    bool beginwnd, slider1, slider2;
     int selected_mat = 0;
     if (g_imgui_enabled) {
         IMGUI_CHECKVERSION();
@@ -3197,7 +3277,29 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                     "Skybox Texture", &selected_mat,
                     "   Grass Cube\0   Desert Cube\0   Snow Cube\0   Sunset Cube\0\0");
 
-                ImGui::Text("\n");
+                ImGui::Separator();
+                ImGui::Checkbox("Enable SSAO", &g_ssao_enabled);
+
+                ImGui::Separator();
+                ImGui::Checkbox("Enable Directional Lights", &g_dir_light_enabled);
+
+                ImGui::Separator();
+
+                ImGui::Text("Ambient Accessiblity Power:");
+                ImGui::SliderFloat("Ambient Intensity", &g_accessiblity_power, 4.0f, 40.0f);
+                slider1 = ImGui::IsItemActive();
+
+                ImGui::Separator();
+
+                ImGui::Text("Ambient Factor Addend Value:");
+                ImGui::SliderFloat("Indirect Factor", &g_occlusion_addend, 0.0f, 0.4f);
+                slider2 = ImGui::IsItemActive();
+
+                ImGui::Separator();
+                ImGui::Checkbox("Show Shadow Mapping Debug Window", &g_show_smap_debug);
+                ImGui::Checkbox("Show SSAO Debug Window", &g_show_ssao_debug);
+
+                ImGui::Text("\n\n");
                 ImGui::Separator();
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
@@ -3215,7 +3317,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                     render_ctx->sky_tex_heap_index = TEX_SKY_CUBEMAP3;
 
                 // control mouse activation
-                g_mouse_active = !(beginwnd);
+                g_mouse_active = !(beginwnd || slider1 || slider2);
             }
 #pragma endregion
             Timer_Tick(&g_timer);

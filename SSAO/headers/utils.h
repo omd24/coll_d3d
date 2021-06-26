@@ -71,7 +71,12 @@ struct PassConstants {
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light lights[MAX_LIGHTS];
 
-    float padding[40];  // Padding so the constant buffer is 256-byte aligned
+    //
+    // customization ui paramters
+    UINT dir_light_flag;
+    UINT debug_flag;
+
+    float padding[38];  // Padding so the constant buffer is 256-byte aligned
 };
 static_assert(1536 == sizeof(PassConstants), "Constant buffer size must be 256b aligned");
 
@@ -93,7 +98,12 @@ struct SSAOConstants {
     float occlusion_fade_end;
     float surface_epsilon;
 
-    float padding[6];
+    //
+    // customization ui paramters
+    float accessiblity_power;
+    float occlusion_addend;
+
+    float padding[4];
 };
 static_assert(512 == sizeof(SSAOConstants), "Constant buffer size must be 256b aligned");
 

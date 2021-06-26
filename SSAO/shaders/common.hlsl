@@ -78,6 +78,13 @@ cbuffer PerPassConstantBuffer : register(b1){
     // indices [NUM_DIR_LIGHTS+NUM_POINT_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHT+NUM_SPOT_LIGHTS)
     // are spot lights for a maximum of MAX_LIGHTS per object.
     Light g_lights[MAX_LIGHTS];
+
+    //
+    // customization ui paramters
+    uint g_dir_light_flag;
+    float g_ambient_power;
+    uint g_ambient_addend;
+    uint g_debug_flag;
 }
 
 //

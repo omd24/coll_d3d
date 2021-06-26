@@ -107,9 +107,13 @@ PixelShader_Main (VertOut pin) : SV_Target{
     
     const float shininess = (1.0f - roughness) * nmap_sample.a;
     Material mat = {diffuse_albedo, fresnel_r0, shininess};
-    float4 direct_light = compute_lighting(
-        g_lights, mat, pin.pos_world, bumped_normal_w, to_eye, shadow_factor
-    );
+    
+    float4 direct_light = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if (g_dir_light_flag) {
+        direct_light = compute_lighting(
+            g_lights, mat, pin.pos_world, bumped_normal_w, to_eye, shadow_factor
+        );
+    }
     float4 lit_color = ambient + direct_light;
 
     // add specular reflections
