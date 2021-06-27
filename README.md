@@ -1,5 +1,5 @@
 # coll_d3d
-A collection of diverse Direct3D12 demos, experimenting with a bit more advanced topics
+A collection of different Direct3D12 demos, experimenting with a bit more advanced topics
 In this repo, I implemented the following topics so far:
  - Dynamic Indexing
  - Frustum Culling & Instancing (https://youtu.be/NWaZ4oGrkZw)
