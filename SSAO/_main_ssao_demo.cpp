@@ -2791,6 +2791,24 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         }
     } // WARP -> Windows Advanced Rasterization ...
 
+    // HOTFIX for D3D12 expecting only signed shaders at PSO create
+    // To see shader validation errors copy DXIL.lib into executable directory
+    // Also using -Vd flag with dxc disables validations
+    // https://github.com/microsoft/DirectXShaderCompiler/issues/2550
+    // https://docs.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-d3d12enableexperimentalfeatures
+    static const UUID D3D12ExperimentalShaderModels = { /* 76f5573e-f13a-40f5-b297-81ce9e18933f */
+      0x76f5573e,
+      0xf13a,
+      0x40f5,
+      { 0xb2, 0x97, 0x81, 0xce, 0x9e, 0x18, 0x93, 0x3f }
+    };
+    D3D12EnableExperimentalFeatures(
+      1,
+      &D3D12ExperimentalShaderModels,
+      NULL,
+      NULL
+    );
+
     // Create Logical Device
     auto res = D3D12CreateDevice(adapters[0], D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&render_ctx->device));
     CHECK_AND_FAIL(res);
